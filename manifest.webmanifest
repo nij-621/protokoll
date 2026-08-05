@@ -1,0 +1,14 @@
+{
+  "name": "Protokoll",
+  "short_name": "Protokoll",
+  "description": "다국어 회의 녹음 전사 — 내 Gemini API 키로, 내 폰에만 저장",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#0E1514",
+  "theme_color": "#0E6B66",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
