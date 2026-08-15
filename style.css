@@ -13,6 +13,8 @@
   --radius: 12px;
   --serif: ui-serif, "New York", Georgia, serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --press: transform 160ms var(--ease-out);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -59,7 +61,9 @@ a { color: var(--petrol); }
 .iconbtn {
   background: none; border: 0; font-size: 18px; color: var(--ink-soft);
   padding: 4px 8px; cursor: pointer;
+  transition: var(--press);
 }
+.iconbtn:active, .brand:active { transform: scale(0.92); }
 
 .view { padding: 16px; max-width: 640px; margin: 0 auto; }
 .view-title { font-family: var(--serif); font-size: 24px; margin-bottom: 16px; }
@@ -70,6 +74,15 @@ a { color: var(--petrol); }
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 14px 16px; cursor: pointer; text-align: left; width: 100%;
   display: flex; flex-direction: column; gap: 3px;
+  color: var(--ink); font: inherit;
+  transition: var(--press);
+  animation: rise 320ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+.meeting-item:active { transform: scale(0.98); }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .meeting-item strong { font-size: 16px; }
 .meeting-item .meta { font-size: 13px; color: var(--ink-soft); font-family: var(--mono); }
@@ -82,7 +95,11 @@ a { color: var(--petrol); }
 .btn {
   border: 1px solid var(--line); background: var(--card); color: var(--ink);
   border-radius: var(--radius); padding: 10px 16px; font-size: 15px; cursor: pointer;
+  transition: var(--press), opacity 200ms ease, filter 200ms ease;
 }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+/* 상태 텍스트 교체 시(생성 → 생성 중…) 블러로 크로스페이드 */
+.btn.swapping { filter: blur(2px); opacity: 0.6; }
 .btn-primary { background: var(--petrol); border-color: var(--petrol); color: #fff; font-weight: 600; }
 @media (prefers-color-scheme: dark) { .btn-primary { color: #06211F; } }
 .btn-big { width: 100%; padding: 14px; font-size: 17px; }
@@ -107,14 +124,19 @@ input[type="text"], input[type="password"], textarea, select {
 .field-row > label { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
 
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.seg button { border: 0; background: var(--card); color: var(--ink-soft); padding: 7px 14px; font-size: 14px; cursor: pointer; }
+.seg button {
+  border: 0; background: var(--card); color: var(--ink-soft); padding: 7px 14px; font-size: 14px; cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
 .seg button.active { background: var(--petrol); color: #fff; }
 @media (prefers-color-scheme: dark) { .seg button.active { color: #06211F; } }
 
 .filedrop {
   display: block; border: 1.5px dashed var(--petrol); border-radius: var(--radius);
   background: var(--petrol-soft); padding: 26px 16px; text-align: center; cursor: pointer;
+  transition: var(--press), background-color 150ms ease;
 }
+.filedrop:active { transform: scale(0.99); background: color-mix(in srgb, var(--petrol-soft) 80%, var(--petrol)); }
 .filedrop input { display: none; }
 .filedrop span { font-weight: 600; color: var(--petrol); }
 .filedrop small { display: block; font-weight: 400; color: var(--ink-soft); margin-top: 4px; font-size: 13px; }
@@ -123,7 +145,11 @@ input[type="text"], input[type="password"], textarea, select {
 .progress { margin-top: 20px; }
 .progress-stage { font-family: var(--mono); font-size: 13px; color: var(--petrol); margin-bottom: 8px; }
 .progress-bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
-.progress-bar div { height: 100%; width: 0%; background: var(--petrol); transition: width 0.3s; }
+.progress-bar div {
+  height: 100%; width: 100%; background: var(--petrol);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform 300ms linear;
+}
 .preview {
   margin-top: 12px; max-height: 40vh; overflow-y: auto;
   font-family: var(--mono); font-size: 12px; line-height: 1.6;
@@ -140,12 +166,21 @@ input[type="text"], input[type="password"], textarea, select {
 }
 .detail-date { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
 
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; position: relative; }
 .tabs button {
-  border: 0; background: none; padding: 9px 12px; font-size: 14px;
-  color: var(--ink-soft); cursor: pointer; border-bottom: 2px solid transparent;
+  border: 0; background: none; padding: 9px 12px; font: inherit; font-size: 14px;
+  color: var(--ink-soft); cursor: pointer;
+  transition: color 150ms ease, var(--press);
 }
-.tabs button.active { color: var(--petrol); border-bottom-color: var(--petrol); font-weight: 600; }
+.tabs button:active { transform: scale(0.96); }
+.tabs button.active { color: var(--petrol); font-weight: 600; }
+/* 활성 밑줄: 탭 사이를 미끄러져 이동 (JS가 --x/--w 갱신) */
+.tabs::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; height: 2px;
+  width: var(--w, 0px); background: var(--petrol);
+  transform: translateX(var(--x, 0px));
+  transition: transform 200ms var(--ease-out), width 200ms var(--ease-out);
+}
 
 /* 전사 렌더: 왼쪽 거터에 타임스탬프, 화자별 색 — 이 앱의 시그니처 */
 .tline { display: grid; grid-template-columns: 62px 1fr; gap: 10px; padding: 5px 0; }
@@ -196,12 +231,24 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
 /* 토스트 */
 #toast {
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(0);
   background: var(--ink); color: var(--paper);
   padding: 10px 18px; border-radius: 20px; font-size: 14px;
   max-width: 86vw; text-align: center; z-index: 50;
+  opacity: 1; pointer-events: none;
+  transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out);
+  @starting-style { opacity: 0; transform: translateX(-50%) translateY(8px); }
 }
+/* 퇴장은 진입보다 빠르게 */
+#toast.leaving { opacity: 0; transform: translateX(-50%) translateY(4px); transition-duration: 140ms; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; animation: none !important; }
+  /* 움직임만 제거. opacity·색 전환은 이해를 돕는다 */
+  .meeting-item { animation: none; }
+  .btn, .iconbtn, .brand, .meeting-item, .filedrop, .tabs button { transition-property: opacity, background-color, color, filter; }
+  .btn:active, .iconbtn:active, .brand:active, .meeting-item:active, .filedrop:active, .tabs button:active { transform: none; }
+  .tabs::after { transition: none; }
+  #toast { transition: opacity 200ms ease; }
+  #toast, #toast.leaving { transform: translateX(-50%); }
+  #toast { @starting-style { transform: translateX(-50%); } }
 }

@@ -252,9 +252,19 @@ function renderedTranscriptText(m) {
 /* ---------- UI 공통 ---------- */
 function toast(msg, ms = 2600) {
   const t = $('toast');
+  clearTimeout(t._timer); clearTimeout(t._hide);
+  t.classList.remove('leaving');
   t.textContent = msg; t.hidden = false;
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.hidden = true; }, ms);
+  t._timer = setTimeout(() => {
+    t.classList.add('leaving');
+    t._hide = setTimeout(() => { t.hidden = true; t.classList.remove('leaving'); }, 160);
+  }, ms);
+}
+
+// 버튼 라벨을 블러 크로스페이드로 교체
+function swapLabel(btn, text) {
+  btn.classList.add('swapping');
+  setTimeout(() => { btn.textContent = text; btn.classList.remove('swapping'); }, 120);
 }
 function esc(s) {
   return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -294,15 +304,16 @@ async function renderHome() {
   const list = $('meetingList');
   list.innerHTML = '';
   $('emptyHome').hidden = meetings.length > 0;
-  for (const m of meetings) {
+  meetings.forEach((m, i) => {
     const btn = document.createElement('button');
     btn.className = 'meeting-item';
+    btn.style.setProperty('--i', Math.min(i, 8)); // 스태거는 앞 8개까지만
     const n = speakerIds(m).length;
     btn.innerHTML = `<strong>${esc(m.title)}</strong>
       <span class="meta">${new Date(m.createdAt).toLocaleDateString('ko-KR')} · 화자 ${n}명${m.analyses?.mom ? ' · 회의록 ✓' : ''}</span>`;
     btn.onclick = () => openDetail(m.id);
     list.appendChild(btn);
-  }
+  });
   show('home');
 }
 
@@ -323,7 +334,7 @@ function resetNew() {
 function setStage(label, pct) {
   $('progressBox').hidden = false;
   $('progressStage').textContent = label;
-  $('progressFill').style.width = `${Math.round(pct * 100)}%`;
+  $('progressFill').style.transform = `scaleX(${pct})`;
 }
 
 async function startTranscription() {
@@ -386,11 +397,20 @@ async function openDetail(id) {
   renderSpeakers();
   renderAnalysis();
   show('detail');
+  positionTabLine(); // hidden 해제 후 실측
 }
 
 function switchTab(tab) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   ['transcript', 'speakers', 'analysis', 'export'].forEach(t => $(`pane-${t}`).hidden = t !== tab);
+  positionTabLine();
+}
+function positionTabLine() {
+  const tabs = $('tabs');
+  const active = tabs.querySelector('button.active');
+  if (!active) return;
+  tabs.style.setProperty('--x', `${active.offsetLeft}px`);
+  tabs.style.setProperty('--w', `${active.offsetWidth}px`);
 }
 
 function renderTranscript() {
@@ -465,7 +485,7 @@ async function runAnalysis(kind, btn) {
   const outEl = $({ mom: 'momOut', person: 'personOut', feedback: 'feedbackOut' }[kind]);
   btn.disabled = true;
   const oldLabel = btn.textContent;
-  btn.textContent = '생성 중…';
+  swapLabel(btn, '생성 중…');
   try {
     let prompt;
     if (kind === 'mom') prompt = momPrompt(current, analysisLang);
@@ -491,7 +511,7 @@ async function runAnalysis(kind, btn) {
     toast(e.message, 5000);
   } finally {
     btn.disabled = false;
-    btn.textContent = oldLabel;
+    swapLabel(btn, oldLabel);
   }
 }
 
@@ -619,6 +639,7 @@ function bind() {
   await DB.open();
   bind();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.addEventListener('resize', positionTabLine);
   if (!settings.apiKey) renderSettings();
   else renderHome();
 })();
