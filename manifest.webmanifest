@@ -1,6 +1,6 @@
 {
-  "name": "Protokoll",
-  "short_name": "Protokoll",
+  "name": "MeetMemo",
+  "short_name": "MeetMemo",
   "description": "Multilingual meeting transcription — your own Gemini API key, stored only on your phone",
   "start_url": ".",
   "scope": ".",

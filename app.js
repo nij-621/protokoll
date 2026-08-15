@@ -1,4 +1,4 @@
-/* Protokoll — 다국어 회의 전사. 오디오는 전사 시에만 Gemini API로 전송, 결과는 이 기기 IndexedDB에만 저장 */
+/* MeetMemo — 다국어 회의 전사. 오디오는 전사 시에만 Gemini API로 전송, 결과는 이 기기 IndexedDB에만 저장 */
 'use strict';
 
 const API = 'https://generativelanguage.googleapis.com';
@@ -609,9 +609,12 @@ function bind() {
     renderHome();
   };
 
-  $('btnShowKey').onclick = () => {
+  $('btnShowKey').onclick = e => {
     const i = $('apiKeyInput');
-    i.type = i.type === 'password' ? 'text' : 'password';
+    const showing = i.type === 'password';
+    i.type = showing ? 'text' : 'password';
+    e.currentTarget.setAttribute('aria-pressed', String(showing));
+    e.currentTarget.setAttribute('aria-label', showing ? 'Hide key' : 'Show key');
   };
   $('btnLoadModels').onclick = async e => {
     settings.apiKey = $('apiKeyInput').value.trim();
