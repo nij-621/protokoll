@@ -1,7 +1,7 @@
 {
   "name": "Protokoll",
   "short_name": "Protokoll",
-  "description": "다국어 회의 녹음 전사 — 내 Gemini API 키로, 내 폰에만 저장",
+  "description": "Multilingual meeting transcription — your own Gemini API key, stored only on your phone",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

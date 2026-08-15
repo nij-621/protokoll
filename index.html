@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Protokoll</title>
-<meta name="description" content="다국어 회의 녹음 전사 — 내 Gemini API 키로, 내 폰에만 저장">
+<meta name="description" content="Multilingual meeting transcription — your own Gemini API key, stored only on your phone">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -19,150 +19,150 @@
 <body>
 
 <header class="topbar">
-  <button class="brand" id="btnHome" aria-label="홈으로">Protokoll<span class="brand-dot">.</span></button>
+  <button class="brand" id="btnHome" aria-label="Home">Protokoll<span class="brand-dot">.</span></button>
   <span class="langs" aria-hidden="true">EN·DE·KO·ZH·JA</span>
-  <button class="iconbtn" id="btnSettings" aria-label="설정">⚙</button>
+  <button class="iconbtn" id="btnSettings" aria-label="Settings">⚙</button>
 </header>
 
 <main id="app">
 
-  <!-- 홈: 회의 목록 -->
+  <!-- Home: meeting list -->
   <section class="view" id="view-home" hidden>
     <div id="meetingList" class="list"></div>
     <div class="empty" id="emptyHome" hidden>
-      <p class="empty-title">아직 전사한 회의가 없어요.</p>
-      <p class="empty-sub">아이폰 음성 메모에서 녹음을 <b>공유 → 파일에 저장</b>해 두고,<br>아래 버튼으로 그 파일을 선택하면 시작됩니다.</p>
+      <p class="empty-title">No meetings transcribed yet.</p>
+      <p class="empty-sub">In Voice Memos, share a recording with <b>Save to Files</b>,<br>then pick that file with the button below.</p>
     </div>
-    <button class="btn btn-primary btn-big" id="btnNew">＋ 새 전사</button>
+    <button class="btn btn-primary btn-big" id="btnNew">＋ New transcription</button>
   </section>
 
-  <!-- 새 전사 -->
+  <!-- New transcription -->
   <section class="view" id="view-new" hidden>
-    <h2 class="view-title">새 전사</h2>
+    <h2 class="view-title">New transcription</h2>
     <label class="filedrop" id="fileDrop">
       <input type="file" id="fileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.mp4">
-      <span id="fileLabel">녹음 파일 선택<small>음성 메모 → 공유 → "파일에 저장" 한 파일</small></span>
+      <span id="fileLabel">Choose recording<small>A file saved from Voice Memos → Share → "Save to Files"</small></span>
     </label>
     <div class="field">
-      <label for="titleInput">회의 제목</label>
-      <input type="text" id="titleInput" placeholder="예: 8/5 물류사 주간회의">
+      <label for="titleInput">Meeting title</label>
+      <input type="text" id="titleInput" placeholder="e.g. Aug 5 carrier weekly">
     </div>
     <div class="field">
-      <label for="ctxInput">맥락 메모 <small>(선택 — 참석자 이름·주제를 적으면 고유명사 정확도가 올라감)</small></label>
-      <textarea id="ctxInput" rows="2" placeholder="예: 참석자 Müller, Wang, 김과장. 주제: Q3 운임 협상"></textarea>
+      <label for="ctxInput">Context notes <small>(optional — names and topics improve proper-noun accuracy)</small></label>
+      <textarea id="ctxInput" rows="2" placeholder="e.g. Attendees: Müller, Wang, Kim. Topic: Q3 rate negotiation"></textarea>
     </div>
-    <button class="btn btn-primary btn-big" id="btnStart" disabled>전사 시작</button>
+    <button class="btn btn-primary btn-big" id="btnStart" disabled>Start transcription</button>
     <div class="progress" id="progressBox" hidden>
       <div class="progress-stage" id="progressStage"></div>
       <div class="progress-bar"><div id="progressFill"></div></div>
       <pre class="preview" id="livePreview"></pre>
-      <p class="hint">전사 중에는 화면을 켜 둔 채 앱을 벗어나지 마세요. 1시간 녹음 기준 몇 분 걸립니다.</p>
+      <p class="hint">Keep the screen on and stay in the app while transcribing. A one-hour recording takes a few minutes.</p>
     </div>
   </section>
 
-  <!-- 회의 상세 -->
+  <!-- Meeting detail -->
   <section class="view" id="view-detail" hidden>
     <div class="detail-head">
-      <input type="text" id="detailTitle" class="detail-title" aria-label="회의 제목">
+      <input type="text" id="detailTitle" class="detail-title" aria-label="Meeting title">
       <span class="detail-date" id="detailDate"></span>
     </div>
     <nav class="tabs" id="tabs">
-      <button data-tab="transcript" class="active">전사</button>
-      <button data-tab="speakers">화자</button>
-      <button data-tab="analysis">분석</button>
-      <button data-tab="export">내보내기</button>
+      <button data-tab="transcript" class="active">Transcript</button>
+      <button data-tab="speakers">Speakers</button>
+      <button data-tab="analysis">Analysis</button>
+      <button data-tab="export">Export</button>
     </nav>
 
     <div class="tabpane" id="pane-transcript"></div>
 
     <div class="tabpane" id="pane-speakers" hidden>
-      <p class="hint">화자에 실제 이름을 붙이세요. 본인 발언에는 "나"를 켜면 말하기 피드백에 사용됩니다.</p>
+      <p class="hint">Give each speaker a real name. Mark yourself as "Me" to enable speaking feedback.</p>
       <div id="speakerList"></div>
-      <button class="btn btn-primary" id="btnSaveSpeakers">저장</button>
+      <button class="btn btn-primary" id="btnSaveSpeakers">Save</button>
     </div>
 
     <div class="tabpane" id="pane-analysis" hidden>
       <div class="field-row">
-        <label>결과 언어</label>
+        <label>Output language</label>
         <div class="seg" id="langSeg">
-          <button data-lang="ko" class="active">한국어</button>
-          <button data-lang="en">English</button>
+          <button data-lang="en" class="active">English</button>
+          <button data-lang="ko">한국어</button>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>회의록 (Minutes)</h3><button class="btn btn-small" id="btnMom">생성</button></div>
+        <div class="card-head"><h3>Minutes of Meeting</h3><button class="btn btn-small" id="btnMom">Generate</button></div>
         <div class="md" id="momOut"></div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>인물 분석</h3><button class="btn btn-small" id="btnPerson">생성</button></div>
-        <div class="field"><label>대상 화자</label><select id="personSel"></select></div>
-        <details id="scopeBox"><summary>과거 회의 포함 (누적 분석)</summary><div id="scopeList"></div></details>
+        <div class="card-head"><h3>Person profile</h3><button class="btn btn-small" id="btnPerson">Generate</button></div>
+        <div class="field"><label>Speaker</label><select id="personSel"></select></div>
+        <details id="scopeBox"><summary>Include past meetings (cumulative)</summary><div id="scopeList"></div></details>
         <div class="md" id="personOut"></div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>말하기 피드백</h3><button class="btn btn-small" id="btnFeedback">생성</button></div>
-        <p class="hint" id="feedbackHint">화자 탭에서 본인("나")을 지정하면 생성할 수 있습니다.</p>
+        <div class="card-head"><h3>Speaking feedback</h3><button class="btn btn-small" id="btnFeedback">Generate</button></div>
+        <p class="hint" id="feedbackHint">Mark yourself as "Me" in the Speakers tab to enable this.</p>
         <div class="md" id="feedbackOut"></div>
       </div>
     </div>
 
     <div class="tabpane" id="pane-export" hidden>
-      <p class="hint">선택한 항목을 하나의 문서로 묶어 내보냅니다.</p>
-      <label class="check"><input type="checkbox" id="expTranscript" checked> 원본 전사</label>
-      <label class="check"><input type="checkbox" id="expMom"> 회의록 (Minutes)</label>
-      <label class="check"><input type="checkbox" id="expPerson"> 인물 분석</label>
-      <label class="check"><input type="checkbox" id="expFeedback"> 말하기 피드백</label>
+      <p class="hint">Selected sections are combined into one document.</p>
+      <label class="check"><input type="checkbox" id="expTranscript" checked> Transcript</label>
+      <label class="check"><input type="checkbox" id="expMom"> Minutes of Meeting</label>
+      <label class="check"><input type="checkbox" id="expPerson"> Person profile</label>
+      <label class="check"><input type="checkbox" id="expFeedback"> Speaking feedback</label>
       <div class="btnrow">
-        <button class="btn btn-primary" id="btnShare">공유 (메일·메신저)</button>
-        <button class="btn" id="btnCopy">복사</button>
-        <button class="btn" id="btnDownload">.md 저장</button>
+        <button class="btn btn-primary" id="btnShare">Share (mail · messenger)</button>
+        <button class="btn" id="btnCopy">Copy</button>
+        <button class="btn" id="btnDownload">Save .md</button>
       </div>
       <div class="btnrow danger-row">
-        <button class="btn btn-danger" id="btnDelete">이 회의 삭제</button>
+        <button class="btn btn-danger" id="btnDelete">Delete this meeting</button>
       </div>
     </div>
   </section>
 
-  <!-- 설정 -->
+  <!-- Settings -->
   <section class="view" id="view-settings" hidden>
-    <h2 class="view-title">설정</h2>
+    <h2 class="view-title">Settings</h2>
     <div class="field">
-      <label for="apiKeyInput">Gemini API 키</label>
+      <label for="apiKeyInput">Gemini API key</label>
       <div class="keyrow">
         <input type="password" id="apiKeyInput" placeholder="AIza..." autocomplete="off">
-        <button class="iconbtn" id="btnShowKey" aria-label="키 보기">👁</button>
+        <button class="iconbtn" id="btnShowKey" aria-label="Show key">👁</button>
       </div>
-      <p class="hint">키는 이 폰의 브라우저에만 저장됩니다. 발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
+      <p class="hint">Stored only in this phone's browser. Get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
     </div>
     <div class="field">
-      <label for="modelSel">모델</label>
+      <label for="modelSel">Model</label>
       <div class="keyrow">
         <select id="modelSel"></select>
-        <button class="btn btn-small" id="btnLoadModels">목록 불러오기</button>
+        <button class="btn btn-small" id="btnLoadModels">Load list</button>
       </div>
-      <p class="hint">긴 녹음·다국어에는 Flash 계열이 빠르고 저렴합니다.</p>
+      <p class="hint">Flash models are fast and cheap for long, multilingual recordings.</p>
     </div>
     <div class="field">
-      <label>분석 결과 기본 언어</label>
+      <label>Default output language for analysis</label>
       <div class="seg" id="defLangSeg">
-        <button data-lang="ko" class="active">한국어</button>
-        <button data-lang="en">English</button>
+        <button data-lang="en" class="active">English</button>
+        <button data-lang="ko">한국어</button>
       </div>
     </div>
-    <button class="btn btn-primary" id="btnSaveSettings">저장</button>
+    <button class="btn btn-primary" id="btnSaveSettings">Save</button>
 
     <div class="card help">
-      <h3>사용 순서</h3>
+      <h3>How it works</h3>
       <ol>
-        <li>회의를 아이폰 <b>음성 메모</b>로 녹음</li>
-        <li>녹음 공유 → <b>"파일에 저장"</b></li>
-        <li>이 앱에서 <b>새 전사</b> → 그 파일 선택</li>
-        <li>전사 완료 후 화자 이름 지정 → 필요한 분석 생성 → 내보내기</li>
+        <li>Record the meeting with iPhone <b>Voice Memos</b></li>
+        <li>Share the recording → <b>Save to Files</b></li>
+        <li>In this app: <b>New transcription</b> → pick that file</li>
+        <li>Name the speakers → generate what you need → export</li>
       </ol>
-      <p class="hint">오디오는 전사할 때만 Google Gemini API로 전송되고(48시간 후 자동 삭제), 전사·분석 결과는 이 폰에만 저장됩니다.</p>
+      <p class="hint">Audio is sent to the Google Gemini API only when you transcribe (auto-deleted after 48 h). Transcripts and analyses are stored only on this phone.</p>
     </div>
   </section>
 

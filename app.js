@@ -13,7 +13,8 @@ const Settings = {
   },
   save(s) { localStorage.setItem('protokoll-settings', JSON.stringify(s)); },
 };
-let settings = Object.assign({ apiKey: '', model: 'gemini-2.5-flash', lang: 'ko' }, Settings.load());
+let settings = Object.assign({ apiKey: '', model: 'gemini-2.5-flash', lang: 'en' }, Settings.load());
+const LOCALE = 'en-GB';
 
 /* ---------- 저장소 (IndexedDB) ---------- */
 const DB = {
@@ -38,8 +39,8 @@ const DB = {
 async function apiError(r) {
   let msg = `HTTP ${r.status}`;
   try { msg = (await r.json()).error?.message || msg; } catch {}
-  if (r.status === 400 && /API key/i.test(msg)) msg = 'API 키가 올바르지 않습니다. 설정에서 확인하세요.';
-  if (r.status === 429) msg = 'API 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.';
+  if (r.status === 400 && /API key/i.test(msg)) msg = 'Invalid API key. Check it in Settings.';
+  if (r.status === 429) msg = 'API rate limit reached. Try again in a moment.';
   return new Error(msg);
 }
 
@@ -65,7 +66,7 @@ async function uploadAudio(file, onProgress) {
   });
   if (!start.ok) throw await apiError(start);
   const uploadUrl = start.headers.get('x-goog-upload-url');
-  if (!uploadUrl) throw new Error('업로드 URL을 받지 못했습니다.');
+  if (!uploadUrl) throw new Error('Did not receive an upload URL.');
 
   // XHR: 업로드 진행률 표시용
   const uploaded = await new Promise((res, rej) => {
@@ -74,8 +75,8 @@ async function uploadAudio(file, onProgress) {
     xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize');
     xhr.setRequestHeader('X-Goog-Upload-Offset', '0');
     xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => xhr.status < 300 ? res(JSON.parse(xhr.responseText)) : rej(new Error(`업로드 실패 (HTTP ${xhr.status})`));
-    xhr.onerror = () => rej(new Error('업로드 중 네트워크 오류'));
+    xhr.onload = () => xhr.status < 300 ? res(JSON.parse(xhr.responseText)) : rej(new Error(`Upload failed (HTTP ${xhr.status})`));
+    xhr.onerror = () => rej(new Error('Network error during upload'));
     xhr.send(file);
   });
 
@@ -86,7 +87,7 @@ async function uploadAudio(file, onProgress) {
     if (!r.ok) throw await apiError(r);
     f = await r.json();
   }
-  if (f.state !== 'ACTIVE') throw new Error('Gemini가 파일을 처리하지 못했습니다: ' + f.state);
+  if (f.state !== 'ACTIVE') throw new Error('Gemini could not process the file: ' + f.state);
   return { uri: f.uri, mime };
 }
 
@@ -118,7 +119,7 @@ async function streamGenerate(parts, priorTurns, onText) {
       const t = (c?.content?.parts || []).map(p => p.text || '').join('');
       if (t) { text += t; onText && onText(text); }
       if (c?.finishReason) finish = c.finishReason;
-      if (o.promptFeedback?.blockReason) throw new Error('요청이 차단되었습니다: ' + o.promptFeedback.blockReason);
+      if (o.promptFeedback?.blockReason) throw new Error('Request was blocked: ' + o.promptFeedback.blockReason);
     }
   }
   return { text, finish };
@@ -129,7 +130,7 @@ async function generateFull(parts, onText) {
   let turns = [], all = '';
   for (let round = 0; round < 8; round++) {
     const userParts = round === 0 ? parts
-      : [{ text: '출력이 중단되었다. 중단된 지점 바로 다음부터 정확히 이어서 계속 출력하라. 이미 출력한 내용은 반복하지 마라.' }];
+      : [{ text: 'Your output was cut off. Continue exactly from where it stopped. Do not repeat anything already written.' }];
     const { text, finish } = await streamGenerate(userParts, turns, t => onText && onText(all + t));
     turns = [...turns, { role: 'user', parts: userParts }, { role: 'model', parts: [{ text }] }];
     all += text;
@@ -149,68 +150,68 @@ async function fetchModels() {
     .sort();
 }
 
-/* ---------- 프롬프트 ---------- */
+/* ---------- Prompts ---------- */
 function transcriptPrompt(ctx) {
-  return `너는 전문 회의 속기사다. 이 오디오는 영어·독일어·한국어·중국어·일본어가 섞일 수 있는 회의 녹음이다.
+  return `You are a professional meeting stenographer. This audio is a meeting recording that may mix English, German, Korean, Chinese and Japanese.
 
-규칙:
-1. 각 발언을 실제로 말한 언어 그대로 받아써라. 절대 번역하거나 요약하지 마라.
-2. 화자를 목소리로 구분해 "Speaker 1", "Speaker 2" 형식으로 표기하라. 같은 화자는 녹음 끝까지 같은 번호를 유지하라.
-3. 각 발언 시작 시점의 타임스탬프를 [HH:MM:SS] 형식으로 붙여라.
-4. "음", "어", "äh", "also", "like" 같은 필러와 말버릇도 들리는 그대로 포함하라. 문장을 다듬지 마라.
-5. 알아듣기 힘든 부분은 [불명확]으로 표시하라.
-6. 출력 형식 (한 발언당 한 줄, 다른 텍스트 없이 전사만):
-[HH:MM:SS] Speaker 1: 발언 내용
-${ctx ? `\n회의 맥락 (고유명사 참고용): ${ctx}` : ''}`;
+Rules:
+1. Transcribe every utterance verbatim in the language it was actually spoken. Never translate or summarise.
+2. Distinguish speakers by voice and label them "Speaker 1", "Speaker 2", ... Keep the same number for the same voice throughout the whole recording.
+3. Prefix each utterance with its start timestamp in [HH:MM:SS] format.
+4. Keep fillers and verbal tics exactly as heard ("um", "uh", "äh", "also", "like", "음", "어", "あの"). Do not clean up sentences.
+5. Mark unintelligible passages as [unclear].
+6. Output format — one utterance per line, transcript only, no other text:
+[HH:MM:SS] Speaker 1: utterance
+${ctx ? `\nMeeting context (for proper nouns): ${ctx}` : ''}`;
 }
 
-function langName(l) { return l === 'en' ? 'English' : '한국어'; }
+function langName(l) { return l === 'ko' ? 'Korean (한국어)' : 'English'; }
 
 function momPrompt(m, lang) {
-  return `아래는 다국어 회의의 전사본이다. 빠짐없이 꼼꼼하게 회의록(Minutes of Meeting)을 작성하라. 출력 언어: ${langName(lang)}.
+  return `Below is the transcript of a multilingual meeting. Write thorough, complete Minutes of Meeting. Output language: ${langName(lang)}.
 
-형식 (markdown):
-# 회의록: ${m.title}
-- 일시 / 참석자(화자 기준)
-## 논의 내용 (주제별로, 누가 어떤 입장을 냈는지 포함)
-## 결정 사항
-## Action Items (담당자·기한이 언급됐으면 명시)
-## 미결·후속 논의 필요 사항
+Format (markdown):
+# Minutes: ${m.title}
+- Date / Attendees (by speaker)
+## Discussion (by topic, including who took which position)
+## Decisions
+## Action Items (owner and deadline where mentioned)
+## Open points / follow-ups needed
 
-원문에 없는 내용을 지어내지 마라. 사소해 보여도 결정·숫자·날짜·금액은 반드시 포함하라.
+Do not invent anything not in the transcript. Always include decisions, numbers, dates and amounts, even if they seem minor.
 
---- 전사본 ---
+--- Transcript ---
 ${renderedTranscriptText(m)}`;
 }
 
 function personPrompt(name, sources, lang) {
-  const body = sources.map(s => `=== 회의: ${s.title} (${s.date}) ===\n${s.text}`).join('\n\n');
-  return `아래 회의 전사본(들)에서 "${name}"의 발언을 근거로 이 인물을 분석하라. 출력 언어: ${langName(lang)}.
+  const body = sources.map(s => `=== Meeting: ${s.title} (${s.date}) ===\n${s.text}`).join('\n\n');
+  return `Based on what "${name}" says in the meeting transcript(s) below, profile this person. Output language: ${langName(lang)}.
 
-형식 (markdown):
-## ${name} 분석
-### 커뮤니케이션 스타일 (직설/우회, 데이터형/직관형, 언어 사용 패턴)
-### 우선순위와 관심사 (무엇을 반복해서 강조하는가)
-### 의사결정 성향 (신중/신속, 리스크 태도)
-### 협업·설득 팁 (이 사람과 일할 때 효과적인 접근)
+Format (markdown):
+## Profile: ${name}
+### Communication style (direct/indirect, data-driven/intuitive, language-use patterns)
+### Priorities and concerns (what they repeatedly emphasise)
+### Decision-making tendencies (deliberate/fast, attitude to risk)
+### How to work with and persuade this person
 
-반드시 전사본의 실제 발언을 인용해 근거를 대라. 추측이면 추측이라고 표시하라.
+Ground every claim in actual quotes from the transcript. If something is a guess, say so.
 
 ${body}`;
 }
 
 function feedbackPrompt(myName, m, lang) {
-  return `아래 회의 전사본에서 "${myName}"이 나(사용자)다. 내 발언만 분석해 말하기 개선 피드백을 작성하라. 출력 언어: ${langName(lang)}.
+  return `In the meeting transcript below, "${myName}" is me (the user). Analyse only my utterances and give feedback to improve my speaking. Output language: ${langName(lang)}.
 
-형식 (markdown):
-## 말하기 피드백
-### 잘한 점
-### 개선점 (필러·말버릇 사용 빈도, 문장 구조, 명확성, 언어 전환 습관 — 실제 발언을 인용해 지적)
-### 다음 회의에서 시도할 것 (구체적 행동 2~3개)
+Format (markdown):
+## Speaking feedback
+### What went well
+### What to improve (filler and tic frequency, sentence structure, clarity, language-switching habits — quote actual utterances)
+### To try in the next meeting (2–3 concrete actions)
 
-혹독하지 않되 솔직하게. 인용 없는 지적은 하지 마라.
+Honest but not harsh. No criticism without a quote.
 
---- 전사본 ---
+--- Transcript ---
 ${renderedTranscriptText(m)}`;
 }
 
@@ -310,7 +311,7 @@ async function renderHome() {
     btn.style.setProperty('--i', Math.min(i, 8)); // 스태거는 앞 8개까지만
     const n = speakerIds(m).length;
     btn.innerHTML = `<strong>${esc(m.title)}</strong>
-      <span class="meta">${new Date(m.createdAt).toLocaleDateString('ko-KR')} · 화자 ${n}명${m.analyses?.mom ? ' · 회의록 ✓' : ''}</span>`;
+      <span class="meta">${new Date(m.createdAt).toLocaleDateString(LOCALE)} · ${n} speaker${n === 1 ? '' : 's'}${m.analyses?.mom ? ' · minutes ✓' : ''}</span>`;
     btn.onclick = () => openDetail(m.id);
     list.appendChild(btn);
   });
@@ -323,7 +324,7 @@ let pickedFile = null;
 function resetNew() {
   pickedFile = null;
   $('fileInput').value = '';
-  $('fileLabel').innerHTML = '녹음 파일 선택<small>음성 메모 → 공유 → "파일에 저장" 한 파일</small>';
+  $('fileLabel').innerHTML = 'Choose recording<small>A file saved from Voice Memos → Share → "Save to Files"</small>';
   $('titleInput').value = '';
   $('ctxInput').value = '';
   $('btnStart').disabled = true;
@@ -338,7 +339,7 @@ function setStage(label, pct) {
 }
 
 async function startTranscription() {
-  if (!settings.apiKey) { toast('먼저 설정에서 Gemini API 키를 입력하세요'); show('settings'); return; }
+  if (!settings.apiKey) { toast('Enter your Gemini API key in Settings first'); show('settings'); return; }
   if (!pickedFile) return;
   const title = $('titleInput').value.trim() || pickedFile.name.replace(/\.[^.]+$/, '');
   const ctx = $('ctxInput').value.trim();
@@ -348,20 +349,20 @@ async function startTranscription() {
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 
   try {
-    setStage('1/3 오디오 업로드 중…', 0);
-    const { uri, mime } = await uploadAudio(pickedFile, p => setStage(`1/3 오디오 업로드 중… ${Math.round(p * 100)}%`, p * 0.4));
-    setStage('2/3 Gemini가 파일 처리 중…', 0.45);
+    setStage('1/3 Uploading audio…', 0);
+    const { uri, mime } = await uploadAudio(pickedFile, p => setStage(`1/3 Uploading audio… ${Math.round(p * 100)}%`, p * 0.4));
+    setStage('2/3 Gemini is processing the file…', 0.45);
 
-    setStage('3/3 전사 중… (실시간 미리보기)', 0.5);
+    setStage('3/3 Transcribing… (live preview)', 0.5);
     const preview = $('livePreview');
     const raw = await generateFull(
       [{ file_data: { file_uri: uri, mime_type: mime } }, { text: transcriptPrompt(ctx) }],
       t => {
         preview.textContent = t.length > 4000 ? '…' + t.slice(-4000) : t;
         preview.scrollTop = preview.scrollHeight;
-        setStage(`3/3 전사 중… ${t.length.toLocaleString()}자`, Math.min(0.95, 0.5 + t.length / 120000));
+        setStage(`3/3 Transcribing… ${t.length.toLocaleString()} chars`, Math.min(0.95, 0.5 + t.length / 120000));
       });
-    if (!raw) throw new Error('전사 결과가 비어 있습니다. 다시 시도해 보세요.');
+    if (!raw) throw new Error('The transcript came back empty. Please try again.');
 
     const meeting = {
       id: crypto.randomUUID(),
@@ -370,11 +371,11 @@ async function startTranscription() {
     };
     for (const sp of speakerIds(meeting)) meeting.speakers[sp] = { name: '', me: false };
     await DB.put(meeting);
-    setStage('완료', 1);
-    toast('전사 완료 — 화자 탭에서 이름을 붙여 보세요');
+    setStage('Done', 1);
+    toast('Transcription complete — name the speakers in the Speakers tab');
     openDetail(meeting.id);
   } catch (e) {
-    setStage('오류: ' + e.message, 0);
+    setStage('Error: ' + e.message, 0);
     toast(e.message, 5000);
   } finally {
     $('btnStart').disabled = false;
@@ -391,7 +392,7 @@ async function openDetail(id) {
   if (!current) return renderHome();
   analysisLang = settings.lang;
   $('detailTitle').value = current.title;
-  $('detailDate').textContent = new Date(current.createdAt).toLocaleString('ko-KR') + ' · ' + (current.fileName || '');
+  $('detailDate').textContent = new Date(current.createdAt).toLocaleString(LOCALE) + ' · ' + (current.fileName || '');
   switchTab('transcript');
   renderTranscript();
   renderSpeakers();
@@ -439,8 +440,8 @@ function renderSpeakers() {
     row.className = 'speaker-row';
     const info = current.speakers[sp] || { name: '', me: false };
     row.innerHTML = `<span class="speaker-tag">${esc(sp)}</span>
-      <input type="text" placeholder="이름 (예: Müller)" value="${esc(info.name)}" data-sp="${esc(sp)}">
-      <label class="me-toggle"><input type="radio" name="meRadio" data-sp="${esc(sp)}" ${info.me ? 'checked' : ''}> 나</label>`;
+      <input type="text" placeholder="Name (e.g. Müller)" value="${esc(info.name)}" data-sp="${esc(sp)}">
+      <label class="me-toggle"><input type="radio" name="meRadio" data-sp="${esc(sp)}" ${info.me ? 'checked' : ''}> Me</label>`;
     box.appendChild(row);
   }
 }
@@ -454,7 +455,7 @@ async function saveSpeakers() {
   await DB.put(current);
   renderTranscript();
   renderAnalysis();
-  toast('저장했습니다');
+  toast('Saved');
 }
 
 /* ---------- 분석 ---------- */
@@ -469,8 +470,8 @@ function renderAnalysis() {
     $('scopeList').innerHTML = all
       .filter(m => m.id !== current.id)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map(m => `<label class="check"><input type="checkbox" data-mid="${m.id}"> ${esc(m.title)} <small>(${new Date(m.createdAt).toLocaleDateString('ko-KR')})</small></label>`)
-      .join('') || '<p class="hint">다른 회의가 없습니다.</p>';
+      .map(m => `<label class="check"><input type="checkbox" data-mid="${m.id}"> ${esc(m.title)} <small>(${new Date(m.createdAt).toLocaleDateString(LOCALE)})</small></label>`)
+      .join('') || '<p class="hint">No other meetings yet.</p>';
   });
   const my = mySpeaker(current);
   $('feedbackHint').hidden = !!my;
@@ -481,21 +482,21 @@ function renderAnalysis() {
 }
 
 async function runAnalysis(kind, btn) {
-  if (!settings.apiKey) { toast('설정에서 API 키를 입력하세요'); return; }
+  if (!settings.apiKey) { toast('Enter your API key in Settings'); return; }
   const outEl = $({ mom: 'momOut', person: 'personOut', feedback: 'feedbackOut' }[kind]);
   btn.disabled = true;
   const oldLabel = btn.textContent;
-  swapLabel(btn, '생성 중…');
+  swapLabel(btn, 'Generating…');
   try {
     let prompt;
     if (kind === 'mom') prompt = momPrompt(current, analysisLang);
     else if (kind === 'person') {
       const sp = $('personSel').value;
       const name = displayName(current, sp);
-      const sources = [{ title: current.title, date: new Date(current.createdAt).toLocaleDateString('ko-KR'), text: renderedTranscriptText(current) }];
+      const sources = [{ title: current.title, date: new Date(current.createdAt).toLocaleDateString(LOCALE), text: renderedTranscriptText(current) }];
       for (const cb of document.querySelectorAll('#scopeList input:checked')) {
         const m = await DB.get(cb.dataset.mid);
-        if (m) sources.push({ title: m.title, date: new Date(m.createdAt).toLocaleDateString('ko-KR'), text: renderedTranscriptText(m) });
+        if (m) sources.push({ title: m.title, date: new Date(m.createdAt).toLocaleDateString(LOCALE), text: renderedTranscriptText(m) });
       }
       prompt = personPrompt(name, sources, analysisLang);
     } else {
@@ -506,7 +507,7 @@ async function runAnalysis(kind, btn) {
     current.analyses[kind] = { text, lang: analysisLang, at: Date.now() };
     await DB.put(current);
     outEl.innerHTML = mdToHtml(text);
-    toast('완료');
+    toast('Done');
   } catch (e) {
     toast(e.message, 5000);
   } finally {
@@ -517,8 +518,8 @@ async function runAnalysis(kind, btn) {
 
 /* ---------- 내보내기 ---------- */
 function buildExport() {
-  const parts = [`# ${current.title}\n${new Date(current.createdAt).toLocaleString('ko-KR')}`];
-  if ($('expTranscript').checked) parts.push(`## 전사 (원문)\n\n${renderedTranscriptText(current)}`);
+  const parts = [`# ${current.title}\n${new Date(current.createdAt).toLocaleString(LOCALE)}`];
+  if ($('expTranscript').checked) parts.push(`## Transcript (verbatim)\n\n${renderedTranscriptText(current)}`);
   if ($('expMom').checked && current.analyses.mom) parts.push(current.analyses.mom.text);
   if ($('expPerson').checked && current.analyses.person) parts.push(current.analyses.person.text);
   if ($('expFeedback').checked && current.analyses.feedback) parts.push(current.analyses.feedback.text);
@@ -544,7 +545,7 @@ async function shareExport() {
 }
 async function copyExport() {
   await navigator.clipboard.writeText(buildExport());
-  toast('클립보드에 복사했습니다');
+  toast('Copied to clipboard');
 }
 function downloadExport() {
   const blob = new Blob([buildExport()], { type: 'text/markdown' });
@@ -602,9 +603,9 @@ function bind() {
   $('btnCopy').onclick = copyExport;
   $('btnDownload').onclick = downloadExport;
   $('btnDelete').onclick = async () => {
-    if (!confirm(`"${current.title}" 회의를 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    if (!confirm(`Delete "${current.title}"? This cannot be undone.`)) return;
     await DB.del(current.id);
-    toast('삭제했습니다');
+    toast('Deleted');
     renderHome();
   };
 
@@ -614,9 +615,9 @@ function bind() {
   };
   $('btnLoadModels').onclick = async e => {
     settings.apiKey = $('apiKeyInput').value.trim();
-    if (!settings.apiKey) { toast('API 키를 먼저 입력하세요'); return; }
+    if (!settings.apiKey) { toast('Enter your API key first'); return; }
     e.target.disabled = true;
-    try { fillModelSelect(await fetchModels()); toast('모델 목록을 불러왔습니다'); }
+    try { fillModelSelect(await fetchModels()); toast('Model list loaded'); }
     catch (err) { toast(err.message, 5000); }
     finally { e.target.disabled = false; }
   };
@@ -629,7 +630,7 @@ function bind() {
     settings.apiKey = $('apiKeyInput').value.trim();
     settings.model = $('modelSel').value || settings.model;
     Settings.save(settings);
-    toast('설정을 저장했습니다');
+    toast('Settings saved');
     renderHome();
   };
 }
