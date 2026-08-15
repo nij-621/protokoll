@@ -55,7 +55,10 @@
     </div>
     <button class="btn btn-primary btn-big" id="btnStart" disabled>Start transcription</button>
     <div class="progress" id="progressBox" hidden>
-      <div class="progress-stage" id="progressStage"></div>
+      <div class="progress-head">
+        <div class="progress-stage" id="progressStage"></div>
+        <button class="btn btn-small btn-danger" id="btnCancel" hidden>Cancel</button>
+      </div>
       <div class="progress-bar"><div id="progressFill"></div></div>
       <pre class="preview" id="livePreview"></pre>
       <p class="hint">Keep the screen on and stay in the app while transcribing. A one-hour recording takes a few minutes.</p>
@@ -101,6 +104,7 @@
         <div class="card-head"><h3>Person profile</h3><button class="btn btn-small" id="btnPerson">Generate</button></div>
         <div class="field"><label>Speaker</label><select id="personSel"></select></div>
         <details id="scopeBox"><summary>Include past meetings (cumulative)</summary><div id="scopeList"></div></details>
+        <p class="hint" id="personMeta"></p>
         <div class="md" id="personOut"></div>
       </div>
 
@@ -140,7 +144,9 @@
           <svg class="ic-eye-off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
         </button>
       </div>
-      <p class="hint">Stored only in this phone's browser. Get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
+      <label class="check"><input type="checkbox" id="rememberKey" checked> Remember key on this device</label>
+      <p class="hint">Unchecked: the key is kept only until you close the app. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> — set a usage cap on it in Google Cloud.</p>
+      <button class="btn btn-small btn-danger" id="btnForgetKey">Remove key from this device</button>
     </div>
     <div class="field">
       <label for="modelSel">Model</label>
@@ -148,7 +154,7 @@
         <select id="modelSel"></select>
         <button class="btn btn-small" id="btnLoadModels">Load list</button>
       </div>
-      <p class="hint">Flash models are fast and cheap for long, multilingual recordings.</p>
+      <p class="hint">Load list picks the newest stable Flash model for you the first time; change it here any time.</p>
     </div>
     <div class="field">
       <label>Default output language for analysis</label>
@@ -159,6 +165,16 @@
     </div>
     <button class="btn btn-primary" id="btnSaveSettings">Save</button>
 
+    <div class="card">
+      <h3>Backup</h3>
+      <p class="hint">Everything lives on this phone. Back up all meetings to a file (iCloud Drive, mail…) and restore on a new device.</p>
+      <div class="btnrow">
+        <button class="btn" id="btnBackup">Back up all meetings</button>
+        <button class="btn" id="btnRestore">Restore from backup</button>
+        <input type="file" id="restoreInput" accept="application/json,.json" hidden>
+      </div>
+    </div>
+
     <div class="card help">
       <h3>How it works</h3>
       <ol>
@@ -167,7 +183,7 @@
         <li>In this app: <b>New transcription</b> → pick that file</li>
         <li>Name the speakers → generate what you need → export</li>
       </ol>
-      <p class="hint">Audio is sent to the Google Gemini API only when you transcribe (auto-deleted after 48 h). Transcripts and analyses are stored only on this phone.</p>
+      <p class="hint">Audio is sent to the Google Gemini API only when you transcribe and is deleted from Google's servers as soon as transcription finishes. Transcripts and analyses are stored only on this phone.</p>
     </div>
   </section>
 

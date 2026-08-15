@@ -1,20 +1,34 @@
-/* MeetMemo — 다국어 회의 전사. 오디오는 전사 시에만 Gemini API로 전송, 결과는 이 기기 IndexedDB에만 저장 */
+/* MeetMemo — 다국어 회의 전사. 오디오는 전사 시에만 Gemini API로 전송(끝나면 즉시 삭제), 결과는 이 기기 IndexedDB에만 저장 */
 'use strict';
 
 const API = 'https://generativelanguage.googleapis.com';
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const LOCALE = 'en-GB';
+const STREAM_IDLE_MS = 3 * 60 * 1000;   // 스트림 무응답 3분이면 중단
+const FALLBACK_MODEL = 'gemini-2.5-flash';
 
-/* ---------- 설정 (localStorage) ---------- */
+/* ---------- 설정 ----------
+   apiKey는 rememberKey일 때만 localStorage, 아니면 sessionStorage(앱 닫으면 사라짐) */
+const SKEY = 'protokoll-settings', KKEY = 'protokoll-apikey';
 const Settings = {
   load() {
-    try { return JSON.parse(localStorage.getItem('protokoll-settings')) || {}; }
-    catch { return {}; }
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem(SKEY)) || {}; } catch {}
+    s.apiKey = (s.rememberKey !== false ? localStorage.getItem(KKEY) : null) || sessionStorage.getItem(KKEY) || '';
+    return s;
   },
-  save(s) { localStorage.setItem('protokoll-settings', JSON.stringify(s)); },
+  save(s) {
+    const { apiKey, ...rest } = s;
+    localStorage.setItem(SKEY, JSON.stringify(rest));
+    if (s.rememberKey) { localStorage.setItem(KKEY, apiKey); sessionStorage.removeItem(KKEY); }
+    else { sessionStorage.setItem(KKEY, apiKey); localStorage.removeItem(KKEY); }
+  },
+  forgetKey() { localStorage.removeItem(KKEY); sessionStorage.removeItem(KKEY); },
 };
-let settings = Object.assign({ apiKey: '', model: 'gemini-2.5-flash', lang: 'en' }, Settings.load());
-const LOCALE = 'en-GB';
+let settings = Object.assign({ apiKey: '', model: FALLBACK_MODEL, lang: 'en', rememberKey: true, modelPicked: false }, Settings.load());
+// 옛 버전이 settings 안에 apiKey를 저장했다면 새 위치로 이관
+try { const old = JSON.parse(localStorage.getItem(SKEY) || '{}'); if (old.apiKey) { settings.apiKey = settings.apiKey || old.apiKey; Settings.save(settings); } } catch {}
 
 /* ---------- 저장소 (IndexedDB) ---------- */
 const DB = {
@@ -36,39 +50,45 @@ const DB = {
 };
 
 /* ---------- Gemini API ---------- */
+const authHeaders = extra => ({ 'x-goog-api-key': settings.apiKey, ...extra });
+
 async function apiError(r) {
   let msg = `HTTP ${r.status}`;
   try { msg = (await r.json()).error?.message || msg; } catch {}
-  if (r.status === 400 && /API key/i.test(msg)) msg = 'Invalid API key. Check it in Settings.';
+  if ((r.status === 400 || r.status === 403) && /API key/i.test(msg)) msg = 'Invalid API key. Check it in Settings.';
   if (r.status === 429) msg = 'API rate limit reached. Try again in a moment.';
   return new Error(msg);
 }
 
-function guessMime(file) {
-  if (file.type && file.type !== 'audio/x-m4a') return file.type;
+// 브라우저가 알려준 MIME을 우선, m4a는 두 후보를 순서대로 시도
+function mimeCandidates(file) {
   const ext = file.name.split('.').pop().toLowerCase();
-  return { m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac',
-           ogg: 'audio/ogg', flac: 'audio/flac', mp4: 'audio/mp4' }[ext] || 'audio/mp4';
+  const byExt = { m4a: ['audio/mp4', 'audio/m4a'], mp4: ['audio/mp4'], mp3: ['audio/mpeg', 'audio/mp3'], wav: ['audio/wav'],
+                  aac: ['audio/aac'], ogg: ['audio/ogg'], flac: ['audio/flac'], caf: ['audio/x-caf'] }[ext] || [];
+  const list = [];
+  if (file.type && file.type !== 'audio/x-m4a') list.push(file.type);
+  for (const m of byExt) if (!list.includes(m)) list.push(m);
+  if (!list.length) list.push('audio/mp4');
+  return list;
 }
 
-async function uploadAudio(file, onProgress) {
-  const mime = guessMime(file);
-  const start = await fetch(`${API}/upload/v1beta/files?key=${settings.apiKey}`, {
-    method: 'POST',
-    headers: {
+async function uploadAudio(file, mime, onProgress, signal) {
+  const start = await fetch(`${API}/upload/v1beta/files`, {
+    method: 'POST', signal,
+    headers: authHeaders({
       'X-Goog-Upload-Protocol': 'resumable',
       'X-Goog-Upload-Command': 'start',
       'X-Goog-Upload-Header-Content-Length': String(file.size),
       'X-Goog-Upload-Header-Content-Type': mime,
       'Content-Type': 'application/json',
-    },
+    }),
     body: JSON.stringify({ file: { display_name: file.name } }),
   });
   if (!start.ok) throw await apiError(start);
   const uploadUrl = start.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Did not receive an upload URL.');
 
-  // XHR: 업로드 진행률 표시용
+  // XHR: 업로드 진행률 + 취소 지원
   const uploaded = await new Promise((res, rej) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', uploadUrl);
@@ -77,61 +97,77 @@ async function uploadAudio(file, onProgress) {
     xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => xhr.status < 300 ? res(JSON.parse(xhr.responseText)) : rej(new Error(`Upload failed (HTTP ${xhr.status})`));
     xhr.onerror = () => rej(new Error('Network error during upload'));
+    xhr.onabort = () => rej(new DOMException('Cancelled', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.send(file);
   });
 
   let f = uploaded.file;
   while (f.state === 'PROCESSING') {
     await sleep(3000);
-    const r = await fetch(`${API}/v1beta/${f.name}?key=${settings.apiKey}`);
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    const r = await fetch(`${API}/v1beta/${f.name}`, { headers: authHeaders(), signal });
     if (!r.ok) throw await apiError(r);
     f = await r.json();
   }
   if (f.state !== 'ACTIVE') throw new Error('Gemini could not process the file: ' + f.state);
-  return { uri: f.uri, mime };
+  return { uri: f.uri, name: f.name };
 }
 
-async function streamGenerate(parts, priorTurns, onText) {
+async function deleteRemoteFile(name) {
+  if (!name) return;
+  try { await fetch(`${API}/v1beta/${name}`, { method: 'DELETE', headers: authHeaders() }); } catch {}
+}
+
+async function streamGenerate(parts, priorTurns, onText, signal) {
   const body = {
     contents: [...priorTurns, { role: 'user', parts }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 65536 },
+    generationConfig: { maxOutputTokens: 65536 },
   };
-  const r = await fetch(`${API}/v1beta/models/${settings.model}:streamGenerateContent?alt=sse&key=${settings.apiKey}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  const r = await fetch(`${API}/v1beta/models/${settings.model}:streamGenerateContent?alt=sse`, {
+    method: 'POST', signal, headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
   });
   if (!r.ok) throw await apiError(r);
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '', text = '', finish = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 1);
-      if (!line.startsWith('data:')) continue;
-      const json = line.slice(5).trim();
-      if (!json) continue;
-      let o; try { o = JSON.parse(json); } catch { continue; }
-      const c = o.candidates?.[0];
-      const t = (c?.content?.parts || []).map(p => p.text || '').join('');
-      if (t) { text += t; onText && onText(text); }
-      if (c?.finishReason) finish = c.finishReason;
-      if (o.promptFeedback?.blockReason) throw new Error('Request was blocked: ' + o.promptFeedback.blockReason);
+  // 무응답 타임아웃: 청크가 STREAM_IDLE_MS 동안 안 오면 중단
+  let idle;
+  const armIdle = () => { clearTimeout(idle); idle = setTimeout(() => reader.cancel('idle'), STREAM_IDLE_MS); };
+  armIdle();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      armIdle();
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue;
+        const json = line.slice(5).trim();
+        if (!json) continue;
+        let o; try { o = JSON.parse(json); } catch { continue; }
+        const c = o.candidates?.[0];
+        const t = (c?.content?.parts || []).map(p => p.text || '').join('');
+        if (t) { text += t; onText && onText(text); }
+        if (c?.finishReason) finish = c.finishReason;
+        if (o.promptFeedback?.blockReason) throw new Error('Request was blocked: ' + o.promptFeedback.blockReason);
+      }
     }
-  }
+  } finally { clearTimeout(idle); }
+  if (!finish && !text) throw new Error('No response from Gemini for 3 minutes — stopped. Try again.');
   return { text, finish };
 }
 
 // MAX_TOKENS로 잘리면 이어쓰기 요청을 반복해 전체를 받는다
-async function generateFull(parts, onText) {
+async function generateFull(parts, onText, signal) {
   let turns = [], all = '';
   for (let round = 0; round < 8; round++) {
     const userParts = round === 0 ? parts
       : [{ text: 'Your output was cut off. Continue exactly from where it stopped. Do not repeat anything already written.' }];
-    const { text, finish } = await streamGenerate(userParts, turns, t => onText && onText(all + t));
+    const { text, finish } = await streamGenerate(userParts, turns, t => onText && onText(all + t), signal);
     turns = [...turns, { role: 'user', parts: userParts }, { role: 'model', parts: [{ text }] }];
     all += text;
     if (finish !== 'MAX_TOKENS') break;
@@ -140,14 +176,23 @@ async function generateFull(parts, onText) {
 }
 
 async function fetchModels() {
-  const r = await fetch(`${API}/v1beta/models?key=${settings.apiKey}&pageSize=100`);
+  const r = await fetch(`${API}/v1beta/models?pageSize=200`, { headers: authHeaders() });
   if (!r.ok) throw await apiError(r);
   const data = await r.json();
   return (data.models || [])
     .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map(m => m.name.replace('models/', ''))
-    .filter(n => n.startsWith('gemini') && !/embedding|image|tts|live|audio-dialog/.test(n))
+    .filter(n => n.startsWith('gemini') && !/embedding|image|tts|live|audio-dialog|robotics|computer-use/.test(n))
     .sort();
+}
+
+// 목록에서 가장 최신 정식 Flash 모델을 고른다 (gemini-X.Y-flash 형태, preview/lite/exp 제외)
+function pickDefaultModel(models) {
+  const stable = models
+    .map(n => ({ n, m: n.match(/^gemini-(\d+)(?:\.(\d+))?-flash$/) }))
+    .filter(x => x.m)
+    .sort((a, b) => (+b.m[1] - +a.m[1]) || ((+b.m[2] || 0) - (+a.m[2] || 0)));
+  return stable[0]?.n || models.find(n => /flash/.test(n)) || settings.model;
 }
 
 /* ---------- Prompts ---------- */
@@ -268,7 +313,7 @@ function swapLabel(btn, text) {
   setTimeout(() => { btn.textContent = text; btn.classList.remove('swapping'); }, 120);
 }
 function esc(s) {
-  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 // 최소 markdown 렌더 (분석 결과용)
@@ -293,6 +338,8 @@ function mdToHtml(md) {
   return html;
 }
 
+function fmtDate(ts) { return new Date(ts).toLocaleDateString(LOCALE); }
+
 const views = ['home', 'new', 'detail', 'settings'];
 function show(view) {
   views.forEach(v => $(`view-${v}`).hidden = v !== view);
@@ -311,7 +358,7 @@ async function renderHome() {
     btn.style.setProperty('--i', Math.min(i, 8)); // 스태거는 앞 8개까지만
     const n = speakerIds(m).length;
     btn.innerHTML = `<strong>${esc(m.title)}</strong>
-      <span class="meta">${new Date(m.createdAt).toLocaleDateString(LOCALE)} · ${n} speaker${n === 1 ? '' : 's'}${m.analyses?.mom ? ' · minutes ✓' : ''}</span>`;
+      <span class="meta">${fmtDate(m.createdAt)} · ${n} speaker${n === 1 ? '' : 's'}${m.analyses?.mom ? ' · minutes ✓' : ''}</span>`;
     btn.onclick = () => openDetail(m.id);
     list.appendChild(btn);
   });
@@ -320,6 +367,7 @@ async function renderHome() {
 
 /* ---------- 새 전사 ---------- */
 let pickedFile = null;
+let job = null; // { controller, remoteName } — 진행 중인 전사 (중복 실행 방지·취소용)
 
 function resetNew() {
   pickedFile = null;
@@ -328,6 +376,7 @@ function resetNew() {
   $('titleInput').value = '';
   $('ctxInput').value = '';
   $('btnStart').disabled = true;
+  $('btnCancel').hidden = true;
   $('progressBox').hidden = true;
   $('livePreview').textContent = '';
 }
@@ -339,34 +388,53 @@ function setStage(label, pct) {
 }
 
 async function startTranscription() {
+  if (job) return; // 이미 실행 중
   if (!settings.apiKey) { toast('Enter your Gemini API key in Settings first'); show('settings'); return; }
   if (!pickedFile) return;
-  const title = $('titleInput').value.trim() || pickedFile.name.replace(/\.[^.]+$/, '');
+  const file = pickedFile;
+  const title = $('titleInput').value.trim() || file.name.replace(/\.[^.]+$/, '');
   const ctx = $('ctxInput').value.trim();
   $('btnStart').disabled = true;
+  $('btnCancel').hidden = false;
+  job = { controller: new AbortController(), remoteName: null };
+  const { signal } = job.controller;
 
   let wakeLock = null;
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 
+  const preview = $('livePreview');
   try {
-    setStage('1/3 Uploading audio…', 0);
-    const { uri, mime } = await uploadAudio(pickedFile, p => setStage(`1/3 Uploading audio… ${Math.round(p * 100)}%`, p * 0.4));
-    setStage('2/3 Gemini is processing the file…', 0.45);
-
-    setStage('3/3 Transcribing… (live preview)', 0.5);
-    const preview = $('livePreview');
-    const raw = await generateFull(
-      [{ file_data: { file_uri: uri, mime_type: mime } }, { text: transcriptPrompt(ctx) }],
-      t => {
-        preview.textContent = t.length > 4000 ? '…' + t.slice(-4000) : t;
-        preview.scrollTop = preview.scrollHeight;
-        setStage(`3/3 Transcribing… ${t.length.toLocaleString()} chars`, Math.min(0.95, 0.5 + t.length / 120000));
-      });
+    const mimes = mimeCandidates(file);
+    let raw = '';
+    for (let i = 0; i < mimes.length; i++) {
+      const mime = mimes[i];
+      setStage('1/3 Uploading audio…', 0);
+      const up = await uploadAudio(file, mime, p => setStage(`1/3 Uploading audio… ${Math.round(p * 100)}%`, p * 0.4), signal);
+      job.remoteName = up.name;
+      setStage('2/3 Gemini is processing the file…', 0.45);
+      setStage('3/3 Transcribing… (live preview)', 0.5);
+      try {
+        raw = await generateFull(
+          [{ file_data: { file_uri: up.uri, mime_type: mime } }, { text: transcriptPrompt(ctx) }],
+          t => {
+            preview.textContent = t.length > 4000 ? '…' + t.slice(-4000) : t;
+            preview.scrollTop = preview.scrollHeight;
+            setStage(`3/3 Transcribing… ${t.length.toLocaleString()} chars`, Math.min(0.95, 0.5 + t.length / 120000));
+          }, signal);
+        break;
+      } catch (e) {
+        // MIME 문제로 보이면 다음 후보로 재시도 (업로드부터 다시)
+        const mimeIssue = /mime|unsupported|not supported|invalid argument/i.test(e.message);
+        await deleteRemoteFile(job.remoteName); job.remoteName = null;
+        if (mimeIssue && i < mimes.length - 1) { preview.textContent = ''; continue; }
+        throw e;
+      }
+    }
     if (!raw) throw new Error('The transcript came back empty. Please try again.');
 
     const meeting = {
       id: crypto.randomUUID(),
-      title, createdAt: Date.now(), fileName: pickedFile.name,
+      title, createdAt: Date.now(), fileName: file.name,
       context: ctx, raw, speakers: {}, analyses: {},
     };
     for (const sp of speakerIds(meeting)) meeting.speakers[sp] = { name: '', me: false };
@@ -375,12 +443,19 @@ async function startTranscription() {
     toast('Transcription complete — name the speakers in the Speakers tab');
     openDetail(meeting.id);
   } catch (e) {
-    setStage('Error: ' + e.message, 0);
-    toast(e.message, 5000);
+    if (e.name === 'AbortError') { setStage('Cancelled', 0); toast('Transcription cancelled'); }
+    else { setStage('Error: ' + e.message, 0); toast(e.message, 5000); }
   } finally {
+    await deleteRemoteFile(job?.remoteName); // 성공·실패·취소 모두 원격 오디오 즉시 삭제
+    job = null;
     $('btnStart').disabled = false;
+    $('btnCancel').hidden = true;
     try { await wakeLock?.release(); } catch {}
   }
+}
+
+function cancelTranscription() {
+  job?.controller.abort();
 }
 
 /* ---------- 상세 ---------- */
@@ -390,13 +465,15 @@ let analysisLang = settings.lang;
 async function openDetail(id) {
   current = await DB.get(id);
   if (!current) return renderHome();
+  current.analyses ||= {};
+  current.analyses.persons ||= {};
   analysisLang = settings.lang;
   $('detailTitle').value = current.title;
   $('detailDate').textContent = new Date(current.createdAt).toLocaleString(LOCALE) + ' · ' + (current.fileName || '');
   switchTab('transcript');
   renderTranscript();
   renderSpeakers();
-  renderAnalysis();
+  await renderAnalysis();
   show('detail');
   positionTabLine(); // hidden 해제 후 실측
 }
@@ -454,49 +531,69 @@ async function saveSpeakers() {
   });
   await DB.put(current);
   renderTranscript();
-  renderAnalysis();
+  await renderAnalysis();
   toast('Saved');
 }
 
 /* ---------- 분석 ---------- */
-function renderAnalysis() {
+// 인물 분석 저장 키: 화자 | 언어 | 포함한 과거 회의 id들
+function personKey() {
+  const sp = $('personSel').value;
+  const scope = [...document.querySelectorAll('#scopeList input:checked')].map(cb => cb.dataset.mid).sort();
+  return `${sp}|${analysisLang}|${scope.join(',')}`;
+}
+function currentPerson() {
+  const p = current.analyses.persons?.[personKey()];
+  if (p) return p;
+  return current.analyses.person || null; // 옛 버전(단일 저장) 호환
+}
+function renderPersonOut() {
+  const p = currentPerson();
+  $('personOut').innerHTML = p ? mdToHtml(p.text) : '';
+  $('personMeta').textContent = p ? `Generated ${new Date(p.at).toLocaleString(LOCALE)}` : '';
+}
+
+async function renderAnalysis() {
   document.querySelectorAll('#langSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === analysisLang));
-  // 인물 선택
+  const prevSp = $('personSel').value;
   const sel = $('personSel');
   sel.innerHTML = speakerIds(current)
     .map(sp => `<option value="${esc(sp)}">${esc(displayName(current, sp))}</option>`).join('');
-  // 누적 범위: 다른 회의 목록
-  DB.all().then(all => {
-    $('scopeList').innerHTML = all
-      .filter(m => m.id !== current.id)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map(m => `<label class="check"><input type="checkbox" data-mid="${m.id}"> ${esc(m.title)} <small>(${new Date(m.createdAt).toLocaleDateString(LOCALE)})</small></label>`)
-      .join('') || '<p class="hint">No other meetings yet.</p>';
-  });
+  if ([...sel.options].some(o => o.value === prevSp)) sel.value = prevSp;
+  // 누적 범위: 다른 회의 목록 (체크 상태 유지)
+  const checked = new Set([...document.querySelectorAll('#scopeList input:checked')].map(cb => cb.dataset.mid));
+  const all = await DB.all();
+  $('scopeList').innerHTML = all
+    .filter(m => m.id !== current.id)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(m => `<label class="check"><input type="checkbox" data-mid="${m.id}" ${checked.has(m.id) ? 'checked' : ''}> ${esc(m.title)} <small>(${fmtDate(m.createdAt)})</small></label>`)
+    .join('') || '<p class="hint">No other meetings yet.</p>';
   const my = mySpeaker(current);
   $('feedbackHint').hidden = !!my;
   $('btnFeedback').disabled = !my;
   $('momOut').innerHTML = current.analyses.mom ? mdToHtml(current.analyses.mom.text) : '';
-  $('personOut').innerHTML = current.analyses.person ? mdToHtml(current.analyses.person.text) : '';
   $('feedbackOut').innerHTML = current.analyses.feedback ? mdToHtml(current.analyses.feedback.text) : '';
+  renderPersonOut();
 }
 
 async function runAnalysis(kind, btn) {
   if (!settings.apiKey) { toast('Enter your API key in Settings'); return; }
+  if (btn.disabled) return;
   const outEl = $({ mom: 'momOut', person: 'personOut', feedback: 'feedbackOut' }[kind]);
   btn.disabled = true;
   const oldLabel = btn.textContent;
   swapLabel(btn, 'Generating…');
   try {
-    let prompt;
+    let prompt, key = null;
     if (kind === 'mom') prompt = momPrompt(current, analysisLang);
     else if (kind === 'person') {
+      key = personKey();
       const sp = $('personSel').value;
       const name = displayName(current, sp);
-      const sources = [{ title: current.title, date: new Date(current.createdAt).toLocaleDateString(LOCALE), text: renderedTranscriptText(current) }];
+      const sources = [{ title: current.title, date: fmtDate(current.createdAt), text: renderedTranscriptText(current) }];
       for (const cb of document.querySelectorAll('#scopeList input:checked')) {
         const m = await DB.get(cb.dataset.mid);
-        if (m) sources.push({ title: m.title, date: new Date(m.createdAt).toLocaleDateString(LOCALE), text: renderedTranscriptText(m) });
+        if (m) sources.push({ title: m.title, date: fmtDate(m.createdAt), text: renderedTranscriptText(m) });
       }
       prompt = personPrompt(name, sources, analysisLang);
     } else {
@@ -504,9 +601,11 @@ async function runAnalysis(kind, btn) {
       prompt = feedbackPrompt(displayName(current, my), current, analysisLang);
     }
     const text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
-    current.analyses[kind] = { text, lang: analysisLang, at: Date.now() };
+    const entry = { text, lang: analysisLang, at: Date.now() };
+    if (kind === 'person') { current.analyses.persons ||= {}; current.analyses.persons[key] = entry; }
+    else current.analyses[kind] = entry;
     await DB.put(current);
-    outEl.innerHTML = mdToHtml(text);
+    if (kind === 'person') renderPersonOut(); else outEl.innerHTML = mdToHtml(text);
     toast('Done');
   } catch (e) {
     toast(e.message, 5000);
@@ -521,7 +620,7 @@ function buildExport() {
   const parts = [`# ${current.title}\n${new Date(current.createdAt).toLocaleString(LOCALE)}`];
   if ($('expTranscript').checked) parts.push(`## Transcript (verbatim)\n\n${renderedTranscriptText(current)}`);
   if ($('expMom').checked && current.analyses.mom) parts.push(current.analyses.mom.text);
-  if ($('expPerson').checked && current.analyses.person) parts.push(current.analyses.person.text);
+  if ($('expPerson').checked) { const p = currentPerson(); if (p) parts.push(p.text); }
   if ($('expFeedback').checked && current.analyses.feedback) parts.push(current.analyses.feedback.text);
   return parts.join('\n\n---\n\n');
 }
@@ -531,13 +630,17 @@ function exportFileName() {
   return `${ymd} ${current.title}`.replace(/[\\/:*?"<>|]/g, '_');
 }
 
+async function shareBlob(blob, name, title) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title }); return true; }
+  return false;
+}
 async function shareExport() {
   const text = buildExport();
-  const file = new File([text], exportFileName() + '.txt', { type: 'text/plain' });
   try {
-    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: current.title });
-    else if (navigator.share) await navigator.share({ title: current.title, text });
-    else throw new Error('no-share');
+    if (await shareBlob(new Blob([text], { type: 'text/plain' }), exportFileName() + '.txt', current.title)) return;
+    if (navigator.share) { await navigator.share({ title: current.title, text }); return; }
+    throw new Error('no-share');
   } catch (e) {
     if (e.name === 'AbortError') return;
     await copyExport(); // 공유 미지원 → 클립보드로 폴백
@@ -547,43 +650,86 @@ async function copyExport() {
   await navigator.clipboard.writeText(buildExport());
   toast('Copied to clipboard');
 }
-function downloadExport() {
-  const blob = new Blob([buildExport()], { type: 'text/markdown' });
+function downloadBlob(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = exportFileName() + '.md';
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function downloadExport() {
+  downloadBlob(new Blob([buildExport()], { type: 'text/markdown' }), exportFileName() + '.md');
+}
+
+/* ---------- 백업·복원 (전체 회의 JSON) ---------- */
+async function backupAll() {
+  const meetings = await DB.all();
+  if (!meetings.length) { toast('Nothing to back up yet'); return; }
+  const payload = { app: 'MeetMemo', version: 1, exportedAt: new Date().toISOString(), meetings };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const d = new Date();
+  const name = `meetmemo-backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`;
+  try {
+    if (await shareBlob(blob, name, 'MeetMemo backup')) return;
+  } catch (e) { if (e.name === 'AbortError') return; }
+  downloadBlob(blob, name);
+}
+
+async function restoreFromFile(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { toast('Not a valid backup file'); return; }
+  const list = Array.isArray(data?.meetings) ? data.meetings : null;
+  if (!list) { toast('Not a MeetMemo backup'); return; }
+  const existing = new Set((await DB.all()).map(m => m.id));
+  let added = 0, replaced = 0;
+  for (const m of list) {
+    if (!m?.id || typeof m.raw !== 'string') continue;
+    if (existing.has(m.id)) {
+      if (!confirm(`"${m.title}" already exists. Replace it with the backup version?`)) continue;
+      replaced++;
+    } else added++;
+    await DB.put(m);
+  }
+  toast(`Restored: ${added} added, ${replaced} replaced`, 4000);
+  renderHome();
 }
 
 /* ---------- 설정 화면 ---------- */
 function renderSettings() {
   $('apiKeyInput').value = settings.apiKey;
+  $('rememberKey').checked = settings.rememberKey !== false;
   fillModelSelect([settings.model]);
   document.querySelectorAll('#defLangSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === settings.lang));
   show('settings');
 }
-function fillModelSelect(models) {
+function fillModelSelect(models, selected = settings.model) {
   const sel = $('modelSel');
-  const set = new Set([settings.model, ...models]);
-  sel.innerHTML = [...set].map(m => `<option ${m === settings.model ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  const set = new Set([selected, ...models]);
+  sel.innerHTML = [...set].map(m => `<option ${m === selected ? 'selected' : ''}>${esc(m)}</option>`).join('');
+}
+async function loadModelsAndPick(auto) {
+  const models = await fetchModels();
+  const chosen = auto ? pickDefaultModel(models) : settings.model;
+  fillModelSelect(models, chosen);
+  return { models, chosen };
 }
 
 /* ---------- 이벤트 바인딩 ---------- */
 function bind() {
   $('btnHome').onclick = renderHome;
   $('btnSettings').onclick = renderSettings;
-  $('btnNew').onclick = () => { resetNew(); show('new'); };
+  $('btnNew').onclick = () => { if (job) { show('new'); return; } resetNew(); show('new'); };
 
   $('fileInput').onchange = e => {
     pickedFile = e.target.files[0] || null;
     if (pickedFile) {
       $('fileLabel').innerHTML = `${esc(pickedFile.name)}<small>${(pickedFile.size / 1048576).toFixed(1)} MB</small>`;
       if (!$('titleInput').value) $('titleInput').value = pickedFile.name.replace(/\.[^.]+$/, '');
-      $('btnStart').disabled = false;
+      $('btnStart').disabled = !!job;
     }
   };
   $('btnStart').onclick = startTranscription;
+  $('btnCancel').onclick = cancelTranscription;
 
   $('detailTitle').onchange = async () => {
     current.title = $('detailTitle').value.trim() || current.title;
@@ -595,6 +741,8 @@ function bind() {
   $('langSeg').onclick = e => {
     if (e.target.dataset.lang) { analysisLang = e.target.dataset.lang; renderAnalysis(); }
   };
+  $('personSel').onchange = renderPersonOut;
+  $('scopeList').onchange = renderPersonOut;
   $('btnMom').onclick = e => runAnalysis('mom', e.target);
   $('btnPerson').onclick = e => runAnalysis('person', e.target);
   $('btnFeedback').onclick = e => runAnalysis('feedback', e.target);
@@ -616,12 +764,21 @@ function bind() {
     e.currentTarget.setAttribute('aria-pressed', String(showing));
     e.currentTarget.setAttribute('aria-label', showing ? 'Hide key' : 'Show key');
   };
+  $('btnForgetKey').onclick = () => {
+    if (!confirm('Remove the API key from this device?')) return;
+    settings.apiKey = '';
+    Settings.forgetKey();
+    $('apiKeyInput').value = '';
+    toast('API key removed');
+  };
   $('btnLoadModels').onclick = async e => {
     settings.apiKey = $('apiKeyInput').value.trim();
     if (!settings.apiKey) { toast('Enter your API key first'); return; }
     e.target.disabled = true;
-    try { fillModelSelect(await fetchModels()); toast('Model list loaded'); }
-    catch (err) { toast(err.message, 5000); }
+    try {
+      const { chosen } = await loadModelsAndPick(!settings.modelPicked);
+      toast(settings.modelPicked ? 'Model list loaded' : `Model list loaded — suggested: ${chosen}`, 4000);
+    } catch (err) { toast(err.message, 5000); }
     finally { e.target.disabled = false; }
   };
   $('defLangSeg').onclick = e => {
@@ -629,13 +786,29 @@ function bind() {
     settings.lang = e.target.dataset.lang;
     document.querySelectorAll('#defLangSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === settings.lang));
   };
-  $('btnSaveSettings').onclick = () => {
+  $('btnSaveSettings').onclick = async () => {
     settings.apiKey = $('apiKeyInput').value.trim();
-    settings.model = $('modelSel').value || settings.model;
+    settings.rememberKey = $('rememberKey').checked;
+    const picked = $('modelSel').value || settings.model;
+    // 모델을 한 번도 고른 적 없고 키가 있으면, 최신 Flash를 자동으로 잡는다
+    if (!settings.modelPicked && settings.apiKey && picked === FALLBACK_MODEL) {
+      try { const { chosen } = await loadModelsAndPick(true); settings.model = chosen; }
+      catch { settings.model = picked; }
+    } else settings.model = picked;
+    settings.modelPicked = !!settings.apiKey;
     Settings.save(settings);
-    toast('Settings saved');
+    toast(`Settings saved · model: ${settings.model}`, 3500);
     renderHome();
   };
+  $('btnBackup').onclick = backupAll;
+  $('btnRestore').onclick = () => $('restoreInput').click();
+  $('restoreInput').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (f) await restoreFromFile(f);
+  };
+
+  // 전사 중 실수로 닫는 것 방지
+  window.addEventListener('beforeunload', e => { if (job) { e.preventDefault(); e.returnValue = ''; } });
 }
 
 /* ---------- 시작 ---------- */

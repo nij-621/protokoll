@@ -157,7 +157,9 @@ input[type="text"], input[type="password"], textarea, select {
 
 /* 진행 */
 .progress { margin-top: 20px; }
-.progress-stage { font-family: var(--mono); font-size: 13px; color: var(--petrol); margin-bottom: 8px; }
+.progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.progress-stage { font-family: var(--mono); font-size: 13px; color: var(--petrol); }
+#btnForgetKey { margin-top: 6px; }
 .progress-bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .progress-bar div {
   height: 100%; width: 100%; background: var(--accent);
