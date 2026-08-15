@@ -1,15 +1,19 @@
 /* Protokoll — 회의 속기록 도구. 서체가 곧 정체성: 제목은 세리프(New York), 본문은 시스템, 타임스탬프는 모노 */
 :root {
-  --paper: #F5F7F6;
-  --card: #FFFFFF;
-  --ink: #16211F;
-  --ink-soft: #5A6663;
-  --line: #DDE3E1;
-  --petrol: #0E6B66;
-  --petrol-soft: #E3EFEE;
-  --danger: #A83A2E;
-  --s1: #0E6B66; --s2: #4F5DD3; --s3: #A64D79; --s4: #5A7A2E;
-  --s5: #B4552D; --s6: #4A7FA5; --s7: #8A6A1F; --s8: #6B5AA0;
+  /* 팔레트: bg #fefae0 · primary #283618 · secondary #606c38 · accent #dda15e / #bc6c25 */
+  --paper: #fefae0;
+  --card: #fffdf0;
+  --ink: #283618;
+  --ink-soft: #606c38;
+  --line: #e8dfb8;
+  --petrol: #606c38;          /* secondary — 강조 UI */
+  --petrol-soft: #f3efd3;
+  --primary: #283618;
+  --accent: #dda15e;
+  --accent-deep: #bc6c25;
+  --danger: #bc6c25;
+  --s1: #606c38; --s2: #a55d1c; --s3: #283618; --s4: #8a6d1e;
+  --s5: #7a5c2e; --s6: #4b6b3a; --s7: #8c4416; --s8: #56622a;
   --radius: 12px;
   --serif: ui-serif, "New York", Georgia, serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -18,16 +22,19 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #0E1514;
-    --card: #17201E;
-    --ink: #E8ECEA;
-    --ink-soft: #92A09C;
-    --line: #263230;
-    --petrol: #35B5AC;
-    --petrol-soft: #143430;
-    --danger: #D96A5C;
-    --s1: #35B5AC; --s2: #8B96EE; --s3: #D183AC; --s4: #96BC62;
-    --s5: #E08A61; --s6: #7FB4DA; --s7: #CBA84D; --s8: #A794DC;
+    --paper: #283618;
+    --card: #31411f;
+    --ink: #fefae0;
+    --ink-soft: #cfcba0;
+    --line: #46562b;
+    --petrol: #dda15e;        /* 다크에서는 accent가 강조 UI 역할 */
+    --petrol-soft: #3d4a24;
+    --primary: #fefae0;
+    --accent: #dda15e;
+    --accent-deep: #bc6c25;
+    --danger: #e0905a;
+    --s1: #dda15e; --s2: #e9c88f; --s3: #b7c27a; --s4: #f0e2b0;
+    --s5: #d98c5a; --s6: #a8b86a; --s7: #f2c489; --s8: #c9d29a;
   }
 }
 
@@ -53,7 +60,7 @@ a { color: var(--petrol); }
   font-size: 22px; color: var(--ink);
   background: none; border: 0; padding: 0; cursor: pointer;
 }
-.brand-dot { color: var(--petrol); }
+.brand-dot { color: var(--accent); }
 .langs {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
   color: var(--ink-soft); flex: 1;
@@ -100,8 +107,7 @@ a { color: var(--petrol); }
 .btn:active:not(:disabled) { transform: scale(0.97); }
 /* 상태 텍스트 교체 시(생성 → 생성 중…) 블러로 크로스페이드 */
 .btn.swapping { filter: blur(2px); opacity: 0.6; }
-.btn-primary { background: var(--petrol); border-color: var(--petrol); color: #fff; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .btn-primary { color: #06211F; } }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--paper); font-weight: 600; }
 .btn-big { width: 100%; padding: 14px; font-size: 17px; }
 .btn-small { padding: 6px 12px; font-size: 13px; }
 .btn-danger { color: var(--danger); border-color: var(--danger); background: none; }
@@ -128,8 +134,7 @@ input[type="text"], input[type="password"], textarea, select {
   border: 0; background: var(--card); color: var(--ink-soft); padding: 7px 14px; font-size: 14px; cursor: pointer;
   transition: background-color 150ms ease, color 150ms ease;
 }
-.seg button.active { background: var(--petrol); color: #fff; }
-@media (prefers-color-scheme: dark) { .seg button.active { color: #06211F; } }
+.seg button.active { background: var(--primary); color: var(--paper); }
 
 .filedrop {
   display: block; border: 1.5px dashed var(--petrol); border-radius: var(--radius);
@@ -146,7 +151,7 @@ input[type="text"], input[type="password"], textarea, select {
 .progress-stage { font-family: var(--mono); font-size: 13px; color: var(--petrol); margin-bottom: 8px; }
 .progress-bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .progress-bar div {
-  height: 100%; width: 100%; background: var(--petrol);
+  height: 100%; width: 100%; background: var(--accent);
   transform: scaleX(0); transform-origin: left;
   transition: transform 300ms linear;
 }
@@ -177,7 +182,7 @@ input[type="text"], input[type="password"], textarea, select {
 /* 활성 밑줄: 탭 사이를 미끄러져 이동 (JS가 --x/--w 갱신) */
 .tabs::after {
   content: ""; position: absolute; left: 0; bottom: -1px; height: 2px;
-  width: var(--w, 0px); background: var(--petrol);
+  width: var(--w, 0px); background: var(--accent);
   transform: translateX(var(--x, 0px));
   transition: transform 200ms var(--ease-out), width 200ms var(--ease-out);
 }
@@ -226,7 +231,7 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
 .md:empty { display: none; }
 
 .check { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 15px; }
-.check input { width: 18px; height: 18px; accent-color: var(--petrol); }
+.check input { width: 18px; height: 18px; accent-color: var(--primary); }
 
 /* 토스트 */
 #toast {
