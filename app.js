@@ -265,15 +265,26 @@ const LINE_RE = /^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*\**\s*(Speaker\s*\d+)\s*\**
 
 function parseTranscript(raw) {
   const lines = [];
-  for (const l of raw.split('\n')) {
+  raw.split('\n').forEach((l, rawIdx) => {
     const t = l.trim();
-    if (!t) continue;
+    if (!t) return;
     const m = t.match(LINE_RE);
-    if (m) lines.push({ time: m[1], speaker: m[2].replace(/\s+/, ' '), text: m[3] });
+    if (m) lines.push({ time: m[1], speaker: m[2].replace(/\s+/, ' '), text: m[3], rawIdx });
     else if (lines.length) lines[lines.length - 1].text += ' ' + t; // 줄바꿈으로 이어진 발언
-    else lines.push({ time: '', speaker: '', text: t });
-  }
+    else lines.push({ time: '', speaker: '', text: t, rawIdx });
+  });
   return lines;
+}
+
+// 화자 수동 교정: raw의 해당 줄에서 화자 토큰만 바꾼다
+async function reassignSpeaker(rawIdx, newSp) {
+  const rows = current.raw.split('\n');
+  rows[rawIdx] = rows[rawIdx].replace(/Speaker\s*\d+/, newSp);
+  current.raw = rows.join('\n');
+  if (!current.speakers[newSp]) current.speakers[newSp] = { name: '', me: false };
+  await DB.put(current);
+  renderTranscript();
+  renderSpeakers();
 }
 
 function speakerIds(m) {
@@ -502,11 +513,32 @@ function renderTranscript() {
     return `<div class="tline ${cls}">
       <span class="tstamp">${esc(l.time)}</span>
       <div class="tbody-wrap">
-        <span class="tspeaker">${esc(displayName(current, l.speaker))}</span>
+        <button type="button" class="tspeaker" data-raw="${l.rawIdx}" data-sp="${esc(l.speaker)}" title="Change speaker">${esc(displayName(current, l.speaker))}</button>
         <span class="ttext">${esc(l.text)}</span>
       </div>
     </div>`;
   }).join('');
+  pane.querySelectorAll('.tspeaker').forEach(btn => btn.onclick = () => openSpeakerPicker(btn, ids));
+}
+
+// 화자 라벨 탭 → 인라인 select로 바꿔치기. 선택하면 raw 수정, 포커스 잃으면 원복
+function openSpeakerPicker(btn, ids) {
+  const cur = btn.dataset.sp;
+  const nextN = Math.max(0, ...ids.map(s => parseInt(s.match(/\d+/)) || 0)) + 1;
+  const sel = document.createElement('select');
+  sel.className = 'tspeaker-sel';
+  sel.innerHTML = ids.map(s => {
+    const nm = displayName(current, s);
+    return `<option value="${esc(s)}" ${s === cur ? 'selected' : ''}>${esc(nm)}${nm !== s ? ` (${esc(s)})` : ''}</option>`;
+  }).join('') + `<option value="Speaker ${nextN}">+ New speaker (Speaker ${nextN})</option>`;
+  btn.replaceWith(sel);
+  sel.focus();
+  sel.onchange = () => {
+    sel.onblur = null;
+    if (sel.value !== cur) reassignSpeaker(+btn.dataset.raw, sel.value);
+    else sel.replaceWith(btn);
+  };
+  sel.onblur = () => sel.replaceWith(btn);
 }
 
 function renderSpeakers() {

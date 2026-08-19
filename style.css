@@ -203,9 +203,12 @@ input[type="text"], input[type="password"], textarea, select {
 .tstamp { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); padding-top: 3px; }
 .tbody-wrap { min-width: 0; }
 .tspeaker {
-  font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
   text-transform: uppercase; display: block;
+  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
 }
+.tspeaker:active { opacity: 0.6; }
+.tspeaker-sel { font-size: 12px; padding: 2px 6px; margin-bottom: 2px; max-width: 100%; }
 .ttext { word-break: break-word; }
 .sp-me .tspeaker::after { content: " · 나"; font-weight: 400; }
 .sc1 .tspeaker { color: var(--s1); } .sc2 .tspeaker { color: var(--s2); }
