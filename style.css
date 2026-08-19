@@ -271,3 +271,9 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
   #toast, #toast.leaving { transform: translateX(-50%); }
   #toast { @starting-style { transform: translateX(-50%); } }
 }
+
+/* Speaking feedback · "Say it now" — 따라 읽는 교정문은 크게, 본문 잉크색으로 */
+#feedbackOut blockquote {
+  color: var(--ink); font-size: 17px; line-height: 1.45; font-weight: 500;
+  background: var(--petrol-soft); border-radius: 8px; padding: 8px 12px; margin: 4px 0 12px;
+}

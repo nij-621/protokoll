@@ -251,8 +251,12 @@ function feedbackPrompt(myName, m, lang) {
 Format (markdown):
 ## Speaking feedback
 ### What went well
-### What to improve (filler and tic frequency, sentence structure, clarity, language-switching habits — quote actual utterances)
+### What to improve (filler and tic frequency, sentence structure, clarity, language-switching habits — quote actual utterances; diagnose only, do NOT rewrite here)
 ### To try in the next meeting (2–3 concrete actions)
+### Say it now
+Pick my 2–3 weakest utterances and rewrite each so I can read it aloud right now. Keep the rewrite in the SAME language I originally spoke it in (not necessarily the output language). Format each as:
+- [HH:MM:SS] *original utterance, shortened if long*
+> improved sentence
 
 Honest but not harsh. No criticism without a quote.
 
