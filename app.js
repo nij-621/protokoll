@@ -212,18 +212,34 @@ ${ctx ? `\nMeeting context (for proper nouns): ${ctx}` : ''}`;
 
 function langName(l) { return l === 'ko' ? 'Korean (한국어)' : 'English'; }
 
+function isoDate(ts) { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+
+/* Canonical minutes format — must match minutes-archive/TEMPLATE.md (the archive app parses this) */
 function momPrompt(m, lang) {
-  return `Below is the transcript of a multilingual meeting. Write thorough, complete Minutes of Meeting. Output language: ${langName(lang)}.
+  return `Below is the transcript of a meeting that may mix English, German, Korean, Chinese and Japanese.
+Write complete Minutes of Meeting in EXACTLY the format below. Section headings and field labels must stay in English verbatim; write the content in ${langName(lang)}.
 
-Format (markdown):
 # Minutes: ${m.title}
-- Date / Attendees (by speaker)
-## Discussion (by topic, including who took which position)
-## Decisions
-## Action Items (owner and deadline where mentioned)
-## Open points / follow-ups needed
+Date: ${isoDate(m.createdAt)}
+Attendees: comma-separated names as they appear in the transcript
+Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma-separated
 
-Do not invent anything not in the transcript. Always include decisions, numbers, dates and amounts, even if they seem minor.
+## Summary
+3–5 lines: purpose of the meeting and the main outcomes.
+
+## Discussion
+One bullet per topic. Include who took which position. Keep all numbers, dates, amounts, names.
+
+## Decisions
+One bullet per decision, prefixed with the person(s) who made or own it in square brackets: "- [Name] decision". Use "[All]" if the group decided jointly. Omit the bracket only if no one can be attributed.
+
+## Action Items
+One bullet per action: "- [Owner] task (due YYYY-MM-DD)". Omit "(due …)" if no deadline was stated.
+
+## Open Issues
+Unresolved points and follow-ups needed.
+
+Rules: do not invent anything not in the transcript. If a section has nothing, write "- none". Output only the minutes, no preamble.
 
 --- Transcript ---
 ${renderedTranscriptText(m)}`;
