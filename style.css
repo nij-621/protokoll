@@ -40,6 +40,8 @@
 }
 
 * { box-sizing: border-box; margin: 0; }
+/* hidden 속성은 어떤 display 선언보다 우선 — .fab(display:flex) 같은 클래스가 숨김을 깨는 것 방지 */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", sans-serif;
@@ -379,7 +381,7 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
 /* 라이브 번역 — 자막 스트림: 거터 타임스탬프는 전사 렌더와 같은 문법, 한국어 줄이 주인공 */
 #view-live { padding-bottom: 120px; }
 .fab-row { display: flex; gap: 8px; max-width: 608px; margin: 0 auto; pointer-events: auto; }
-.fab-row .fab { margin: 0; }
+.fab-row .fab { margin: 0; width: auto; } /* .btn-big의 width:100%가 flex 행을 밀어내지 않게 */
 #btnNew, #btnLiveTranscribe { flex: 1; }
 #btnLive, #btnLiveDiscard { flex: none; }
 #btnLiveDiscard { background: var(--card); }
