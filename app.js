@@ -748,7 +748,7 @@ async function renderAnalysis() {
   $('scopeList').innerHTML = all
     .filter(m => m.id !== current.id)
     .sort((a, b) => b.createdAt - a.createdAt)
-    .map(m => `<label class="check"><input type="checkbox" data-mid="${m.id}" ${checked.has(m.id) ? 'checked' : ''}> ${esc(m.title)} <small>(${fmtDate(m.createdAt)})</small></label>`)
+    .map(m => `<label class="check"><input type="checkbox" data-mid="${esc(m.id)}" ${checked.has(m.id) ? 'checked' : ''}> ${esc(m.title)} <small>(${fmtDate(m.createdAt)})</small></label>`)
     .join('') || '<p class="hint">No other meetings yet.</p>';
   const my = mySpeaker(current);
   $('feedbackHint').hidden = !!my;
