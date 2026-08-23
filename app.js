@@ -6,7 +6,8 @@ const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LOCALE = 'en-GB';
 const STREAM_IDLE_MS = 3 * 60 * 1000;   // 스트림 무응답 3분이면 중단
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+const FALLBACK_MODEL = 'gemini-3.6-flash';
+const RETIRED_MODELS = ['gemini-2.5-flash'];   // Google이 은퇴시킨 모델 — 저장된 설정을 새 모델로 이관
 
 /* ---------- 설정 ----------
    apiKey는 rememberKey일 때만 localStorage, 아니면 sessionStorage(앱 닫으면 사라짐) */
@@ -29,6 +30,7 @@ const Settings = {
 let settings = Object.assign({ apiKey: '', model: FALLBACK_MODEL, lang: 'en', rememberKey: true, modelPicked: false }, Settings.load());
 // 옛 버전이 settings 안에 apiKey를 저장했다면 새 위치로 이관
 try { const old = JSON.parse(localStorage.getItem(SKEY) || '{}'); if (old.apiKey) { settings.apiKey = settings.apiKey || old.apiKey; Settings.save(settings); } } catch {}
+if (RETIRED_MODELS.includes(settings.model)) { settings.model = FALLBACK_MODEL; Settings.save(settings); }
 
 /* ---------- 저장소 (IndexedDB) ---------- */
 const DB = {
