@@ -1,5 +1,5 @@
 // MeetMemo SW — 네트워크 우선(업데이트 즉시 반영), 실패 시 캐시 (오프라인에서 저장본 열람)
-const CACHE = 'meetmemo-v5';
+const CACHE = 'meetmemo-v6';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

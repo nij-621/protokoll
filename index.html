@@ -19,8 +19,11 @@
 <body>
 
 <header class="topbar">
+  <button class="iconbtn btn-back" id="btnBack" aria-label="Back" hidden>
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+  </button>
   <button class="brand" id="btnHome" aria-label="Home">MeetMemo<span class="brand-dot">.</span></button>
-  <span class="langs" aria-hidden="true">EN·DE·KO·ZH·JA</span>
+  <span class="spacer"></span>
   <button class="iconbtn" id="btnSettings" aria-label="Settings">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
   </button>
@@ -35,7 +38,9 @@
       <p class="empty-title">No meetings transcribed yet.</p>
       <p class="empty-sub">In Voice Memos, share a recording with <b>Save to Files</b>,<br>then pick that file with the button below.</p>
     </div>
-    <button class="btn btn-primary btn-big" id="btnNew"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>New transcription</button>
+    <div class="fab-wrap">
+      <button class="btn btn-primary btn-big fab" id="btnNew"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>New transcription</button>
+    </div>
   </section>
 
   <!-- New transcription -->
@@ -45,6 +50,11 @@
       <input type="file" id="fileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.mp4">
       <span id="fileLabel">Choose recording<small>A file saved from Voice Memos → Share → "Save to Files"</small></span>
     </label>
+    <div class="filecard" id="fileCard" hidden>
+      <span class="filecard-ico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M2 19a2 2 0 1 1 4 0v1a2 2 0 1 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 1 1-4 0v-1a2 2 0 1 1 4 0"/></svg></span>
+      <div class="filecard-body"><b id="fileName"></b><small id="fileMeta"></small></div>
+      <button type="button" class="filecard-change" id="btnChangeFile">Change</button>
+    </div>
     <div class="field">
       <label for="titleInput">Meeting title</label>
       <input type="text" id="titleInput" placeholder="e.g. Aug 5 carrier weekly">
@@ -55,13 +65,18 @@
     </div>
     <button class="btn btn-primary btn-big" id="btnStart" disabled>Start transcription</button>
     <div class="progress" id="progressBox" hidden>
-      <div class="progress-head">
-        <div class="progress-stage" id="progressStage"></div>
-        <button class="btn btn-small btn-danger" id="btnCancel" hidden>Cancel</button>
+      <div class="steps" id="steps" aria-live="polite">
+        <span class="step" data-step="1"><i>1</i>Upload</span><span class="step-line"></span>
+        <span class="step" data-step="2"><i>2</i>Transcribe</span><span class="step-line"></span>
+        <span class="step" data-step="3"><i>3</i>Save</span>
+        <span class="step-pct" id="progressStage"></span>
       </div>
       <div class="progress-bar"><div id="progressFill"></div></div>
-      <pre class="preview" id="livePreview"></pre>
-      <p class="hint">Keep the screen on and stay in the app while transcribing. A one-hour recording takes a few minutes.</p>
+      <div class="live transcript" id="livePreview" hidden></div>
+      <div class="progress-foot">
+        <p class="hint" id="progressHint">Keep the screen on and stay in the app while transcribing. A one-hour recording takes a few minutes.</p>
+        <button class="btn btn-small btn-danger" id="btnCancel" hidden>Cancel</button>
+      </div>
     </div>
   </section>
 
@@ -70,6 +85,8 @@
     <div class="detail-head">
       <input type="text" id="detailTitle" class="detail-title" aria-label="Meeting title">
       <span class="detail-date" id="detailDate"></span>
+      <div class="fp" id="detailFp" aria-hidden="true"></div>
+      <div class="legend" id="detailLegend"></div>
     </div>
     <nav class="tabs" id="tabs">
       <button data-tab="transcript" class="active">Transcript</button>
@@ -78,7 +95,7 @@
       <button data-tab="export">Export</button>
     </nav>
 
-    <div class="tabpane" id="pane-transcript"></div>
+    <div class="tabpane transcript" id="pane-transcript"></div>
 
     <div class="tabpane" id="pane-speakers" hidden>
       <p class="hint">Give each speaker a real name. Mark yourself as "Me" to enable speaking feedback.</p>
@@ -181,7 +198,7 @@
         <li>Record the meeting with iPhone <b>Voice Memos</b></li>
         <li>Share the recording → <b>Save to Files</b></li>
         <li>In this app: <b>New transcription</b> → pick that file</li>
-        <li>Name the speakers (tap a speaker label in the transcript to fix a wrong one) → generate what you need → export</li>
+        <li>Name the speakers (tap a speaker label or a timestamp in the transcript to fix a wrong one) → generate what you need → export</li>
       </ol>
       <p class="hint">Audio is sent to the Google Gemini API only when you transcribe and is deleted from Google's servers as soon as transcription finishes. Transcripts and analyses are stored only on this phone.</p>
     </div>

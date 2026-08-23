@@ -303,6 +303,7 @@ async function reassignSpeaker(rawIdx, newSp) {
   current.raw = rows.join('\n');
   if (!current.speakers[newSp]) current.speakers[newSp] = { name: '', me: false };
   await DB.put(current);
+  renderDetailHead();
   renderTranscript();
   renderSpeakers();
 }
@@ -316,6 +317,44 @@ function displayName(m, sp) { return m.speakers?.[sp]?.name || sp; }
 function mySpeaker(m) {
   return Object.keys(m.speakers || {}).find(k => m.speakers[k].me) || null;
 }
+
+/* 회의 통계 — 길이(마지막 타임스탬프)와 화자별 발언 비중(글자수). 추가 API 호출 없이 전사본에서 계산 */
+function parseTime(t) {
+  if (!t) return 0;
+  const p = t.split(':').map(Number);
+  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + (p[1] || 0);
+}
+function fmtDuration(sec) {
+  if (!sec) return '';
+  const m = Math.round(sec / 60);
+  if (m < 1) return '<1 min';
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+function meetingStats(m) {
+  const lines = parseTranscript(m.raw || '');
+  const ids = speakerIds(m);
+  const chars = Object.fromEntries(ids.map(s => [s, 0]));
+  let last = 0;
+  for (const l of lines) {
+    if (l.speaker) chars[l.speaker] += l.text.length;
+    last = Math.max(last, parseTime(l.time));
+  }
+  return { ids, chars, duration: last, my: mySpeaker(m) };
+}
+// 화자 → 색 클래스. "나"는 잉크색
+function speakerClass(ids, sp, my) { return sp === my ? 'gme' : `g${(ids.indexOf(sp) % 8) + 1}`; }
+// 대화 지문: 화자별 비중 막대
+function fpHtml(st) {
+  const total = Object.values(st.chars).reduce((a, b) => a + b, 0);
+  if (!total) return '';
+  return st.ids.filter(s => st.chars[s] > 0)
+    .map(s => `<i class="${speakerClass(st.ids, s, st.my)}" style="flex:${(st.chars[s] / total * 100).toFixed(1)}"></i>`)
+    .join('');
+}
+const fmtDay = ts => new Date(ts).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
+const fmtMonth = ts => new Date(ts).toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' });
+const ICON_CHECK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
 
 // 이름 치환이 적용된 전사 텍스트 (분석·내보내기용)
 function renderedTranscriptText(m) {
@@ -374,6 +413,7 @@ function fmtDate(ts) { return new Date(ts).toLocaleDateString(LOCALE); }
 const views = ['home', 'new', 'detail', 'settings'];
 function show(view) {
   views.forEach(v => $(`view-${v}`).hidden = v !== view);
+  $('btnBack').hidden = view === 'home';
   window.scrollTo(0, 0);
 }
 
@@ -383,13 +423,25 @@ async function renderHome() {
   const list = $('meetingList');
   list.innerHTML = '';
   $('emptyHome').hidden = meetings.length > 0;
+  let month = '';
   meetings.forEach((m, i) => {
+    const mo = fmtMonth(m.createdAt);
+    if (mo !== month) {
+      month = mo;
+      const h = document.createElement('div');
+      h.className = 'month'; h.textContent = mo;
+      list.appendChild(h);
+    }
+    const st = meetingStats(m);
+    const n = st.ids.length;
     const btn = document.createElement('button');
     btn.className = 'meeting-item';
     btn.style.setProperty('--i', Math.min(i, 8)); // 스태거는 앞 8개까지만
-    const n = speakerIds(m).length;
+    const meta = [fmtDay(m.createdAt), `${n} speaker${n === 1 ? '' : 's'}`, fmtDuration(st.duration)].filter(Boolean).map(esc);
+    if (m.analyses?.mom) meta.push(`<span class="ok">${ICON_CHECK}Minutes</span>`);
     btn.innerHTML = `<strong>${esc(m.title)}</strong>
-      <span class="meta">${fmtDate(m.createdAt)} · ${n} speaker${n === 1 ? '' : 's'}${m.analyses?.mom ? ' · minutes ✓' : ''}</span>`;
+      <span class="meta">${meta.join('<i class="dot"></i>')}</span>
+      <div class="fp" aria-hidden="true">${fpHtml(st)}</div>`;
     btn.onclick = () => openDetail(m.id);
     list.appendChild(btn);
   });
@@ -403,20 +455,56 @@ let job = null; // { controller, remoteName } — 진행 중인 전사 (중복 �
 function resetNew() {
   pickedFile = null;
   $('fileInput').value = '';
-  $('fileLabel').innerHTML = 'Choose recording<small>A file saved from Voice Memos → Share → "Save to Files"</small>';
+  showFileCard(null);
   $('titleInput').value = '';
   $('ctxInput').value = '';
   $('btnStart').disabled = true;
+  $('btnStart').hidden = false;
   $('btnCancel').hidden = true;
   $('progressBox').hidden = true;
-  $('livePreview').textContent = '';
+  $('livePreview').innerHTML = '';
+  $('livePreview').hidden = true;
 }
 
-function setStage(label, pct) {
+// 파일을 고르면 드롭존 → 파일 카드(이름·크기·길이). 길이는 Audio 메타데이터에서
+function showFileCard(file) {
+  $('fileDrop').hidden = !!file;
+  $('fileCard').hidden = !file;
+  if (!file) return;
+  $('fileName').textContent = file.name;
+  const mb = `${(file.size / 1048576).toFixed(1)} MB`;
+  $('fileMeta').textContent = mb;
+  try {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    a.preload = 'metadata';
+    a.onloadedmetadata = () => {
+      if (isFinite(a.duration) && pickedFile === file) {
+        const s = Math.round(a.duration);
+        const hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60;
+        $('fileMeta').textContent = `${mb} · ${hh ? hh + ':' : ''}${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+      }
+      URL.revokeObjectURL(url);
+    };
+    a.onerror = () => URL.revokeObjectURL(url);
+    a.src = url;
+  } catch {}
+}
+
+// 진행 표시: step 1~3(업로드·전사·저장) + 우측 상태 문구 + 막대. step 0 = 실패/취소
+function setStage(step, label, pct) {
   $('progressBox').hidden = false;
+  document.querySelectorAll('#steps .step').forEach(el => {
+    const n = +el.dataset.step;
+    if (step === 0) { el.classList.toggle('fail', el.classList.contains('now')); return; } // 실패·취소: 진행 중이던 단계만 표시
+    el.classList.remove('fail');
+    el.classList.toggle('done', step > n);
+    el.classList.toggle('now', step === n);
+  });
   $('progressStage').textContent = label;
   $('progressFill').style.transform = `scaleX(${pct})`;
 }
+const fmtElapsed = ms => { const s = Math.round(ms / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`; };
 
 async function startTranscription() {
   if (job) return; // 이미 실행 중
@@ -426,43 +514,51 @@ async function startTranscription() {
   const title = $('titleInput').value.trim() || file.name.replace(/\.[^.]+$/, '');
   const ctx = $('ctxInput').value.trim();
   $('btnStart').disabled = true;
+  $('btnStart').hidden = true;       // 진행 중엔 같은 자리에 액션 하나만(Cancel)
   $('btnCancel').hidden = false;
-  job = { controller: new AbortController(), remoteName: null };
+  job = { controller: new AbortController(), remoteName: null, startedAt: Date.now() };
   const { signal } = job.controller;
 
   let wakeLock = null;
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 
   const preview = $('livePreview');
+  const hint = $('progressHint');
+  const baseHint = 'Keep the screen on and stay in the app while transcribing.';
+  hint.textContent = baseHint;
+  const tick = setInterval(() => { if (job) hint.textContent = `${baseHint} Running for ${fmtElapsed(Date.now() - job.startedAt)}.`; }, 1000);
   try {
     const mimes = mimeCandidates(file);
     let raw = '';
     for (let i = 0; i < mimes.length; i++) {
       const mime = mimes[i];
-      setStage('1/3 Uploading audio…', 0);
-      const up = await uploadAudio(file, mime, p => setStage(`1/3 Uploading audio… ${Math.round(p * 100)}%`, p * 0.4), signal);
+      setStage(1, 'Uploading… 0%', 0);
+      const up = await uploadAudio(file, mime, p => setStage(1, `Uploading… ${Math.round(p * 100)}%`, p * 0.4), signal);
       job.remoteName = up.name;
-      setStage('2/3 Gemini is processing the file…', 0.45);
-      setStage('3/3 Transcribing… (live preview)', 0.5);
+      setStage(2, 'Gemini is reading the file…', 0.45);
       try {
         raw = await generateFull(
           [{ file_data: { file_uri: up.uri, mime_type: mime } }, { text: transcriptPrompt(ctx) }],
           t => {
-            preview.textContent = t.length > 4000 ? '…' + t.slice(-4000) : t;
+            // 라이브 미리보기: 완성본과 같은 렌더러. 마지막 4000자만, 줄 단위로
+            const tail = t.length > 4000 ? t.slice(t.indexOf('\n', t.length - 4000) + 1) : t;
+            preview.hidden = false;
+            preview.innerHTML = transcriptHtml(tail, { speakers: {} }, false);
             preview.scrollTop = preview.scrollHeight;
-            setStage(`3/3 Transcribing… ${t.length.toLocaleString()} chars`, Math.min(0.95, 0.5 + t.length / 120000));
+            setStage(2, `${t.length.toLocaleString()} chars`, Math.min(0.95, 0.5 + t.length / 120000));
           }, signal);
         break;
       } catch (e) {
         // MIME 문제로 보이면 다음 후보로 재시도 (업로드부터 다시)
         const mimeIssue = /mime|unsupported|not supported|invalid argument/i.test(e.message);
         await deleteRemoteFile(job.remoteName); job.remoteName = null;
-        if (mimeIssue && i < mimes.length - 1) { preview.textContent = ''; continue; }
+        if (mimeIssue && i < mimes.length - 1) { preview.innerHTML = ''; preview.hidden = true; continue; }
         throw e;
       }
     }
     if (!raw) throw new Error('The transcript came back empty. Please try again.');
 
+    setStage(3, 'Saving…', 0.97);
     const meeting = {
       id: crypto.randomUUID(),
       title, createdAt: Date.now(), fileName: file.name,
@@ -470,16 +566,19 @@ async function startTranscription() {
     };
     for (const sp of speakerIds(meeting)) meeting.speakers[sp] = { name: '', me: false };
     await DB.put(meeting);
-    setStage('Done', 1);
+    setStage(4, 'Done', 1);
     toast('Transcription complete — name the speakers in the Speakers tab');
     openDetail(meeting.id);
   } catch (e) {
-    if (e.name === 'AbortError') { setStage('Cancelled', 0); toast('Transcription cancelled'); }
-    else { setStage('Error: ' + e.message, 0); toast(e.message, 5000); }
+    if (e.name === 'AbortError') { setStage(0, 'Cancelled', 0); toast('Transcription cancelled'); }
+    else { setStage(0, 'Error: ' + e.message, 0); toast(e.message, 5000); }
   } finally {
+    clearInterval(tick);
+    hint.textContent = baseHint + ' A one-hour recording takes a few minutes.';
     await deleteRemoteFile(job?.remoteName); // 성공·실패·취소 모두 원격 오디오 즉시 삭제
     job = null;
     $('btnStart').disabled = false;
+    $('btnStart').hidden = false;
     $('btnCancel').hidden = true;
     try { await wakeLock?.release(); } catch {}
   }
@@ -500,8 +599,8 @@ async function openDetail(id) {
   current.analyses.persons ||= {};
   analysisLang = settings.lang;
   $('detailTitle').value = current.title;
-  $('detailDate').textContent = new Date(current.createdAt).toLocaleString(LOCALE) + ' · ' + (current.fileName || '');
   switchTab('transcript');
+  renderDetailHead();
   renderTranscript();
   renderSpeakers();
   await renderAnalysis();
@@ -522,28 +621,58 @@ function positionTabLine() {
   tabs.style.setProperty('--w', `${active.offsetWidth}px`);
 }
 
-function renderTranscript() {
-  const pane = $('pane-transcript');
-  const my = mySpeaker(current);
-  const ids = speakerIds(current);
-  pane.innerHTML = parseTranscript(current.raw).map(l => {
-    if (!l.speaker) return `<p class="hint">${esc(l.text)}</p>`;
-    const idx = ids.indexOf(l.speaker);
-    const cls = `sc${(idx % 8) + 1}` + (l.speaker === my ? ' sp-me' : '');
-    return `<div class="tline ${cls}">
-      <span class="tstamp">${esc(l.time)}</span>
-      <div class="tbody-wrap">
-        <button type="button" class="tspeaker" data-raw="${l.rawIdx}" data-sp="${esc(l.speaker)}" title="Change speaker">${esc(displayName(current, l.speaker))}</button>
-        <span class="ttext">${esc(l.text)}</span>
-      </div>
-    </div>`;
+// 상세 헤더: 날짜 · 길이 · 화자수, 대화 지문, 화자 칩(탭 → Speakers 탭)
+function renderDetailHead() {
+  const st = meetingStats(current);
+  const n = st.ids.length;
+  const when = new Date(current.createdAt).toLocaleString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  $('detailDate').textContent = [when, fmtDuration(st.duration), `${n} speaker${n === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+  $('detailDate').title = current.fileName || '';
+  $('detailFp').innerHTML = fpHtml(st);
+  $('detailLegend').innerHTML = st.ids.map(s => {
+    const me = s === st.my;
+    return `<button type="button" class="chip ${me ? 'me' : speakerClass(st.ids, s, st.my)}"><i></i>${esc(displayName(current, s))}${me ? ' · Me' : ''}</button>`;
   }).join('');
-  pane.querySelectorAll('.tspeaker').forEach(btn => btn.onclick = () => openSpeakerPicker(btn, ids));
+  $('detailLegend').querySelectorAll('.chip').forEach(c => c.onclick = () => switchTab('speakers'));
 }
 
-// 화자 라벨 탭 → 인라인 select로 바꿔치기. 선택하면 raw 수정, 포커스 잃으면 원복
+/* 전사 HTML — 같은 화자의 연속 발언은 한 블록(라벨은 첫 줄에만, 색 레일이 블록을 따라감).
+   상세 화면과 라이브 미리보기가 같은 렌더러를 쓴다. interactive면 라벨·타임스탬프가 화자 교정 버튼 */
+function transcriptHtml(raw, m, interactive) {
+  const lines = parseTranscript(raw);
+  const ids = speakerIds({ raw });
+  const my = mySpeaker(m);
+  let prev = null, html = '';
+  for (const l of lines) {
+    if (!l.speaker) { html += `<p class="hint">${esc(l.text)}</p>`; prev = null; continue; }
+    const cls = speakerClass(ids, l.speaker, my);
+    const attrs = `data-raw="${l.rawIdx}" data-sp="${esc(l.speaker)}"`;
+    const tag = interactive ? 'button type="button"' : 'span';
+    const end = interactive ? 'button' : 'span';
+    if (l.speaker !== prev) {
+      const me = l.speaker === my ? '<span class="me">Me</span>' : '';
+      html += `<div class="tl lab ${cls}"><span class="tstamp" aria-hidden="true">${esc(l.time)}</span>
+        <div class="tx"><${tag} class="tspeaker" ${attrs} title="Change speaker">${esc(displayName(m, l.speaker))}${me}</${end}></div></div>`;
+      prev = l.speaker;
+    }
+    html += `<div class="tl ${cls}"><${tag} class="tstamp" ${attrs} title="Change speaker for this line">${esc(l.time)}</${end}>
+      <div class="tx">${esc(l.text)}</div></div>`;
+  }
+  return html;
+}
+
+function renderTranscript() {
+  const pane = $('pane-transcript');
+  const ids = speakerIds(current);
+  pane.innerHTML = transcriptHtml(current.raw, current, true);
+  pane.querySelectorAll('button.tspeaker, button.tstamp').forEach(btn => btn.onclick = () => openSpeakerPicker(btn, ids));
+}
+
+// 화자 라벨·타임스탬프 탭 → 그 줄의 텍스트 칸 위에 인라인 select. 선택하면 raw 수정, 포커스 잃으면 제거
 function openSpeakerPicker(btn, ids) {
   const cur = btn.dataset.sp;
+  const host = btn.closest('.tl').querySelector('.tx');
+  if (host.querySelector('.tspeaker-sel')) return;
   const nextN = Math.max(0, ...ids.map(s => parseInt(s.match(/\d+/)) || 0)) + 1;
   const sel = document.createElement('select');
   sel.className = 'tspeaker-sel';
@@ -551,14 +680,14 @@ function openSpeakerPicker(btn, ids) {
     const nm = displayName(current, s);
     return `<option value="${esc(s)}" ${s === cur ? 'selected' : ''}>${esc(nm)}${nm !== s ? ` (${esc(s)})` : ''}</option>`;
   }).join('') + `<option value="Speaker ${nextN}">+ New speaker (Speaker ${nextN})</option>`;
-  btn.replaceWith(sel);
+  host.prepend(sel);
   sel.focus();
   sel.onchange = () => {
     sel.onblur = null;
     if (sel.value !== cur) reassignSpeaker(+btn.dataset.raw, sel.value);
-    else sel.replaceWith(btn);
+    else sel.remove();
   };
-  sel.onblur = () => sel.replaceWith(btn);
+  sel.onblur = () => sel.remove();
 }
 
 function renderSpeakers() {
@@ -582,6 +711,7 @@ async function saveSpeakers() {
     current.speakers[sp] = { name: inp.value.trim(), me: sp === me };
   });
   await DB.put(current);
+  renderDetailHead();
   renderTranscript();
   await renderAnalysis();
   toast('Saved');
@@ -769,17 +899,19 @@ async function loadModelsAndPick(auto) {
 /* ---------- 이벤트 바인딩 ---------- */
 function bind() {
   $('btnHome').onclick = renderHome;
+  $('btnBack').onclick = renderHome;
   $('btnSettings').onclick = renderSettings;
   $('btnNew').onclick = () => { if (job) { show('new'); return; } resetNew(); show('new'); };
 
   $('fileInput').onchange = e => {
-    pickedFile = e.target.files[0] || null;
-    if (pickedFile) {
-      $('fileLabel').innerHTML = `${esc(pickedFile.name)}<small>${(pickedFile.size / 1048576).toFixed(1)} MB</small>`;
-      if (!$('titleInput').value) $('titleInput').value = pickedFile.name.replace(/\.[^.]+$/, '');
-      $('btnStart').disabled = !!job;
-    }
+    const f = e.target.files[0] || null;
+    if (!f) return; // 취소 → 이전 선택 유지
+    pickedFile = f;
+    showFileCard(f);
+    if (!$('titleInput').value) $('titleInput').value = f.name.replace(/\.[^.]+$/, '');
+    $('btnStart').disabled = !!job;
   };
+  $('btnChangeFile').onclick = () => { if (!job) $('fileInput').click(); };
   $('btnStart').onclick = startTranscription;
   $('btnCancel').onclick = cancelTranscription;
 
