@@ -367,6 +367,7 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
 @media (prefers-reduced-motion: reduce) {
   /* 움직임만 제거. opacity·색 전환은 이해를 돕는다 */
   .meeting-item { animation: none; }
+  .rec-dot { animation: none; }
   .btn, .iconbtn, .brand, .meeting-item, .filedrop, .tabs button, .chip, .filecard-change { transition-property: opacity, background-color, color, filter; }
   .btn:active, .iconbtn:active, .brand:active, .meeting-item:active, .filedrop:active, .tabs button:active, .chip:active, .filecard-change:active { transform: none; }
   .tabs::after { transition: none; }
@@ -374,6 +375,30 @@ details summary { font-size: 13px; color: var(--petrol); cursor: pointer; margin
   #toast, #toast.leaving { transform: translateX(-50%); }
   #toast { @starting-style { transform: translateX(-50%); } }
 }
+
+/* 라이브 번역 — 자막 스트림: 거터 타임스탬프는 전사 렌더와 같은 문법, 한국어 줄이 주인공 */
+#view-live { padding-bottom: 120px; }
+.fab-row { display: flex; gap: 8px; max-width: 608px; margin: 0 auto; pointer-events: auto; }
+.fab-row .fab { margin: 0; }
+#btnNew, #btnLiveTranscribe { flex: 1; }
+#btnLive, #btnLiveDiscard { flex: none; }
+#btnLiveDiscard { background: var(--card); }
+.btn-stop { background: var(--danger); border-color: var(--danger); color: var(--paper); font-weight: 600; }
+.live-status { display: flex; align-items: center; gap: 8px; margin: 4px 0 14px; font-size: 14px; font-weight: 600; }
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.6s ease-in-out infinite; }
+.rec-dot.off { animation: none; background: var(--ink-soft); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.live-elapsed { margin-left: auto; font-family: var(--mono); font-size: 13px; font-weight: 400; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.live-stream { display: flex; flex-direction: column; gap: 14px; }
+.live-stream:empty { display: none; }
+.lv { display: grid; grid-template-columns: 56px 1fr; gap: 0 10px; }
+.lv .tstamp { cursor: default; }
+.lv .tx { border-left-color: var(--accent); transition: opacity 200ms ease; }
+.lv-orig { font-size: 13px; color: var(--ink-soft); margin: 0 0 2px; }
+.lv-ko { font-size: 17px; line-height: 1.45; font-weight: 500; margin: 0; }
+.lv.pending .tx { opacity: 0.45; }
+.lv.err .tx { border-left-color: var(--danger); }
+.lv.err .lv-orig { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 
 /* Speaking feedback · "Say it now" — 따라 읽는 교정문은 크게, 본문 잉크색으로 */
 #feedbackOut blockquote {

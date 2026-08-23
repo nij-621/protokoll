@@ -412,7 +412,7 @@ function mdToHtml(md) {
 
 function fmtDate(ts) { return new Date(ts).toLocaleDateString(LOCALE); }
 
-const views = ['home', 'new', 'detail', 'settings'];
+const views = ['home', 'new', 'live', 'detail', 'settings'];
 function show(view) {
   views.forEach(v => $(`view-${v}`).hidden = v !== view);
   $('btnBack').hidden = view === 'home';
@@ -588,6 +588,199 @@ async function startTranscription() {
 
 function cancelTranscription() {
   job?.controller.abort();
+}
+
+/* ---------- 라이브 번역 ----------
+   이원 구조: 전체 세션을 통째로 녹음(정식 전사용)하면서, 복제 스트림을 10초 청크로 잘라
+   청크마다 독립적으로 전사+한국어 번역(문맥 없음 — 검증 2026-08-23 통과 조건과 동일).
+   자막은 소모품, 정식 회의록은 세션 종료 후 녹음본으로 기존 파이프라인을 돌린다 */
+const LIVE_CHUNK_MS = 10000;
+const LIVE_PROMPT = `You receive a ~10 second audio chunk cut from the middle of a live business meeting. The speech may be German, English, Chinese, Japanese or Korean, possibly code-mixed, and may be cut off mid-sentence at either end.
+
+1. Transcribe the speech verbatim in its original language. Keep cut-off fragments as-is.
+2. Translate the transcription into natural Korean.
+
+Reply in EXACTLY this format, nothing else:
+ORIG: <transcription>
+KO: <Korean translation>
+
+If the chunk contains no intelligible speech, reply exactly: NOSPEECH`;
+
+let live = null; // { stream, chunkStream, mime, fullRec, chunkRec, fullChunks, fullBlob, idx, startedAt, timer, tick, wakeLock, stopping, ended }
+
+// 라이브 세션 중(종료 후 처리 대기 포함)엔 화면 이동 차단 — 녹음·자막이 조용히 유실되는 것 방지
+function liveGuard() {
+  if (!live) return false;
+  toast(live.ended ? 'Finish the live session first — transcribe or discard' : 'Live session running — end it first');
+  return true;
+}
+
+function resetLiveView() {
+  $('liveTitleInput').value = '';
+  $('liveTitleField').hidden = false;
+  $('liveStatus').hidden = true;
+  $('liveStream').innerHTML = '';
+  $('liveHint').textContent = 'Subtitles appear a few seconds after each sentence — original on top, Korean below. The whole session is also recorded, so you can run a full transcription afterwards. Keep the screen on and stay in the app.';
+  $('btnLiveStart').hidden = false;
+  $('btnLiveStop').hidden = true;
+  $('liveEndRow').hidden = true;
+}
+
+const fmtClock = sec => {
+  const s = Math.max(0, Math.round(sec)), h = Math.floor(s / 3600);
+  return `${h ? h + ':' : ''}${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+
+async function startLive() {
+  if (live) return;
+  if (!settings.apiKey) { toast('Enter your Gemini API key in Settings first'); show('settings'); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { toast('Microphone access was denied. Allow it in iOS Settings → MeetMemo.', 5000); return; }
+  const mime = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4'
+    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  live = { stream, chunkStream: null, mime, fullRec: null, chunkRec: null, fullChunks: [], fullBlob: null,
+           idx: 0, startedAt: Date.now(), timer: null, tick: null, wakeLock: null, stopping: false, ended: false };
+  try { live.wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+
+  live.fullRec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  live.fullRec.ondataavailable = e => { if (e.data.size) live.fullChunks.push(e.data); };
+  live.fullRec.start(60000); // 1분마다 조각 수집(연속 녹음 하나로 이어붙일 수 있음)
+
+  // 자막용 청크는 복제 스트림에서 — 같은 스트림에 recorder 2개 붙이는 것보다 사파리에서 안전
+  live.chunkStream = stream.clone();
+  liveCycle();
+
+  $('liveTitleField').hidden = true;
+  $('liveStatus').hidden = false;
+  $('btnLiveStart').hidden = true;
+  $('btnLiveStop').hidden = false;
+  $('liveHint').textContent = 'Korean subtitles land a few seconds behind — glance, don’t wait. End the session to run a full transcription.';
+  live.tick = setInterval(() => { if (live) $('liveElapsed').textContent = fmtClock((Date.now() - live.startedAt) / 1000); }, 1000);
+}
+
+// 10초마다 청크 recorder를 새로 시작 — stop이 만든 blob은 헤더가 붙은 독립 파일이라 그대로 API로 보낼 수 있다
+function liveCycle() {
+  if (!live || live.stopping) return;
+  const rec = new MediaRecorder(live.chunkStream, live.mime ? { mimeType: live.mime } : undefined);
+  const i = live.idx++;
+  const t0 = (Date.now() - live.startedAt) / 1000;
+  rec.ondataavailable = e => { if (e.data.size > 1500) processLiveChunk(i, t0, e.data); };
+  rec.start();
+  live.chunkRec = rec;
+  live.timer = setTimeout(() => { try { rec.stop(); } catch {} liveCycle(); }, LIVE_CHUNK_MS);
+}
+
+async function liveGenerate(b64, mime) {
+  const body = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime, data: b64 } }, { text: LIVE_PROMPT }] }],
+    generationConfig: { temperature: 0.2 },
+  });
+  for (let attempt = 0; ; attempt++) {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 60000);
+    try {
+      const r = await fetch(`${API}/v1beta/models/${settings.model}:generateContent`, {
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body, signal: ctl.signal,
+      });
+      if (!r.ok) throw await apiError(r);
+      const o = await r.json();
+      const text = (o.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+      if (!text) throw new Error('Empty response');
+      return text;
+    } catch (e) {
+      if (attempt >= 1) throw e;
+      await sleep(1200);
+    } finally { clearTimeout(to); }
+  }
+}
+
+function parseLive(text) {
+  if (/^NOSPEECH/i.test(text)) return null;
+  const m = text.match(/ORIG:\s*([\s\S]*?)\s*\nKO:\s*([\s\S]*)/);
+  return m ? { orig: m[1].trim(), ko: m[2].trim() } : { orig: '', ko: text };
+}
+
+async function processLiveChunk(i, t0, blob) {
+  const box = $('liveStream');
+  const el = document.createElement('div');
+  el.className = 'lv pending';
+  el.style.order = i; // 응답이 순서 없이 와도 자막은 시간순
+  el.innerHTML = `<span class="tstamp">${fmtClock(t0)}</span><div class="tx"><p class="lv-orig">…</p><p class="lv-ko"></p></div>`;
+  const nearBottom = () => window.innerHeight + window.scrollY > document.body.scrollHeight - 160;
+  const follow = nearBottom();
+  box.appendChild(el);
+  if (follow) window.scrollTo(0, document.body.scrollHeight);
+  try {
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(blob);
+    });
+    const parsed = parseLive(await liveGenerate(b64, blob.type || live?.mime || 'audio/mp4'));
+    if (!parsed) { el.remove(); return; } // 무음 청크
+    el.classList.remove('pending');
+    el.querySelector('.lv-orig').textContent = parsed.orig;
+    el.querySelector('.lv-ko').textContent = parsed.ko;
+    if (nearBottom()) window.scrollTo(0, document.body.scrollHeight);
+  } catch (e) {
+    // 청크 하나의 실패로 세션을 멈추지 않는다 — 표시만 하고 계속
+    el.classList.remove('pending');
+    el.classList.add('err');
+    el.querySelector('.lv-orig').textContent = `[chunk failed: ${e.message}]`;
+  }
+}
+
+function stopLive() {
+  if (!live || live.stopping) return;
+  live.stopping = true;
+  clearTimeout(live.timer);
+  clearInterval(live.tick);
+  try { if (live.chunkRec?.state !== 'inactive') live.chunkRec.stop(); } catch {}
+  live.fullRec.onstop = () => {
+    live.fullBlob = new Blob(live.fullChunks, { type: live.mime || 'audio/mp4' });
+    live.ended = true;
+    $('btnLiveStop').hidden = true;
+    $('liveEndRow').hidden = false;
+    const mb = (live.fullBlob.size / 1048576).toFixed(1);
+    $('liveHint').textContent = `Recording kept in memory (${mb} MB, ${fmtClock((Date.now() - live.startedAt) / 1000)}). Transcribe it now for the full minutes-quality transcript, or discard everything.`;
+  };
+  try { live.fullRec.stop(); } catch {}
+  live.stream.getTracks().forEach(t => t.stop());
+  live.chunkStream.getTracks().forEach(t => t.stop());
+  try { live.wakeLock?.release(); } catch {}
+  $('liveStatusText').textContent = 'Ended';
+  document.querySelector('#liveStatus .rec-dot')?.classList.add('off');
+}
+
+function liveDefaultTitle() {
+  const d = new Date(live.startedAt);
+  return `Live ${d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// 종료 → 녹음본을 기존 전사 플로우(view-new)에 파일로 넘긴다
+function liveToTranscription() {
+  if (!live?.fullBlob) return;
+  const title = $('liveTitleInput').value.trim() || liveDefaultTitle();
+  const ext = (live.mime || 'audio/mp4').includes('mp4') ? 'm4a' : 'webm';
+  const file = new File([live.fullBlob], `${title}.${ext}`, { type: live.mime || 'audio/mp4' });
+  live = null;
+  resetLiveView();
+  resetNew();
+  pickedFile = file;
+  showFileCard(file);
+  $('titleInput').value = title;
+  $('btnStart').disabled = !!job;
+  show('new');
+  toast('Recording attached — start the transcription');
+}
+
+function liveDiscard() {
+  if (!confirm('Discard this live session? The recording and subtitles will be lost.')) return;
+  live = null;
+  resetLiveView();
+  renderHome();
 }
 
 /* ---------- 상세 ---------- */
@@ -900,10 +1093,15 @@ async function loadModelsAndPick(auto) {
 
 /* ---------- 이벤트 바인딩 ---------- */
 function bind() {
-  $('btnHome').onclick = renderHome;
-  $('btnBack').onclick = renderHome;
-  $('btnSettings').onclick = renderSettings;
+  $('btnHome').onclick = () => { if (!liveGuard()) renderHome(); };
+  $('btnBack').onclick = () => { if (!liveGuard()) renderHome(); };
+  $('btnSettings').onclick = () => { if (!liveGuard()) renderSettings(); };
   $('btnNew').onclick = () => { if (job) { show('new'); return; } resetNew(); show('new'); };
+  $('btnLive').onclick = () => { if (!live) resetLiveView(); show('live'); };
+  $('btnLiveStart').onclick = startLive;
+  $('btnLiveStop').onclick = stopLive;
+  $('btnLiveTranscribe').onclick = liveToTranscription;
+  $('btnLiveDiscard').onclick = liveDiscard;
 
   $('fileInput').onchange = e => {
     const f = e.target.files[0] || null;
@@ -993,8 +1191,8 @@ function bind() {
     if (f) await restoreFromFile(f);
   };
 
-  // 전사 중 실수로 닫는 것 방지
-  window.addEventListener('beforeunload', e => { if (job) { e.preventDefault(); e.returnValue = ''; } });
+  // 전사·라이브 세션 중 실수로 닫는 것 방지
+  window.addEventListener('beforeunload', e => { if (job || live) { e.preventDefault(); e.returnValue = ''; } });
 }
 
 /* ---------- 시작 ---------- */
