@@ -6,6 +6,10 @@ const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LOCALE = 'en-GB';
 const STREAM_IDLE_MS = 3 * 60 * 1000;   // 스트림 무응답 3분이면 중단
+const BLOCK_RETRIES = 2;                // 필터 차단(blockReason)은 오탐이 잦아 자동 재시도
+// 안전 필터 최대 완화 — 회의 녹음이 SAFETY/OTHER 오탐으로 차단되는 것 방지 (OTHER는 보장 없음)
+const SAFETY_OFF = ['HARASSMENT', 'HATE_SPEECH', 'SEXUALLY_EXPLICIT', 'DANGEROUS_CONTENT']
+  .map(c => ({ category: 'HARM_CATEGORY_' + c, threshold: 'BLOCK_NONE' }));
 const FALLBACK_MODEL = 'gemini-3.6-flash';
 const RETIRED_MODELS = ['gemini-2.5-flash'];   // Google이 은퇴시킨 모델 — 저장된 설정을 새 모델로 이관
 
@@ -125,6 +129,7 @@ async function streamGenerate(parts, priorTurns, onText, signal) {
   const body = {
     contents: [...priorTurns, { role: 'user', parts }],
     generationConfig: { maxOutputTokens: 65536 },
+    safetySettings: SAFETY_OFF,
   };
   const r = await fetch(`${API}/v1beta/models/${settings.model}:streamGenerateContent?alt=sse`, {
     method: 'POST', signal, headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
@@ -155,10 +160,19 @@ async function streamGenerate(parts, priorTurns, onText, signal) {
         const t = (c?.content?.parts || []).map(p => p.text || '').join('');
         if (t) { text += t; onText && onText(text); }
         if (c?.finishReason) finish = c.finishReason;
-        if (o.promptFeedback?.blockReason) throw new Error('Request was blocked: ' + o.promptFeedback.blockReason);
+        if (o.promptFeedback?.blockReason) {
+          const e = new Error('Request was blocked: ' + o.promptFeedback.blockReason);
+          e.blocked = true;
+          throw e;
+        }
       }
     }
   } finally { clearTimeout(idle); }
+  if (/SAFETY|RECITATION|PROHIBITED_CONTENT|BLOCKLIST|OTHER/.test(finish)) {
+    const e = new Error('Response was blocked: ' + finish);
+    e.blocked = true;
+    throw e;
+  }
   if (!finish && !text) throw new Error('No response from Gemini for 3 minutes — stopped. Try again.');
   return { text, finish };
 }
@@ -169,7 +183,17 @@ async function generateFull(parts, onText, signal) {
   for (let round = 0; round < 8; round++) {
     const userParts = round === 0 ? parts
       : [{ text: 'Your output was cut off. Continue exactly from where it stopped. Do not repeat anything already written.' }];
-    const { text, finish } = await streamGenerate(userParts, turns, t => onText && onText(all + t), signal);
+    let result;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        result = await streamGenerate(userParts, turns, t => onText && onText(all + t), signal);
+        break;
+      } catch (e) {
+        if (!e.blocked || attempt >= BLOCK_RETRIES || signal?.aborted) throw e;
+        await sleep(2000 * (attempt + 1));   // 차단은 오탐이 잦다 — 잠시 후 같은 요청 재시도
+      }
+    }
+    const { text, finish } = result;
     turns = [...turns, { role: 'user', parts: userParts }, { role: 'model', parts: [{ text }] }];
     all += text;
     if (finish !== 'MAX_TOKENS') break;
@@ -675,6 +699,7 @@ async function liveGenerate(b64, mime) {
   const body = JSON.stringify({
     contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime, data: b64 } }, { text: LIVE_PROMPT }] }],
     generationConfig: { temperature: 0.2 },
+    safetySettings: SAFETY_OFF,
   });
   for (let attempt = 0; ; attempt++) {
     const ctl = new AbortController();
