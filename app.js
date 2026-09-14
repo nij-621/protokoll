@@ -274,33 +274,48 @@ ${renderedTranscriptText(m)}`;
 function personPrompt(name, sources, lang) {
   const body = sources.map(s => `=== Meeting: ${s.title} (${s.date}) ===\n${s.text}`).join('\n\n');
   return `Based on what "${name}" says in the meeting transcript(s) below, profile this person. Output language: ${langName(lang)}.
+The reader is tired and will skim for 5 seconds. Write so the first line alone is useful. Section headings stay in English verbatim.
 
 Format (markdown):
 ## Profile: ${name}
-### Communication style (direct/indirect, data-driven/intuitive, language-use patterns)
-### Priorities and concerns (what they repeatedly emphasise)
-### Decision-making tendencies (deliberate/fast, attitude to risk)
-### How to work with and persuade this person
+ONE sentence (max 15 words): the single most useful thing to remember about this person.
+### How they talk
+2–3 bullets.
+### What they care about
+2–3 bullets.
+### How they decide
+1–2 bullets.
+### To persuade them
+2–3 bullets, each an instruction starting with a verb.
 
-Ground every claim in actual quotes from the transcript. If something is a guess, say so.
+Rules:
+- Every bullet is ONE short sentence, max 12 words, plain everyday words. No jargon, no labels like "data-driven" or "stakeholder".
+- A bullet may end with one short quote (max 8 words) from the transcript as evidence. No claim without evidence.
+- Mark guesses with "(guess)".
+- Max 10 bullets in total. Nothing outside this format, no preamble.
 
 ${body}`;
 }
 
 function feedbackPrompt(myName, m, lang) {
   return `In the meeting transcript below, "${myName}" is me (the user). Analyse only my utterances and give feedback to improve my speaking. Output language: ${langName(lang)}.
+I am tired and will skim this for 5 seconds. Write so the first line alone tells me what to fix. Section headings stay in English verbatim.
 
 Format (markdown):
 ## Speaking feedback
-### What went well
-### What to improve (filler and tic frequency, sentence structure, clarity, language-switching habits — quote actual utterances; diagnose only, do NOT rewrite here)
-### To try in the next meeting (2–3 concrete actions)
+ONE sentence (max 15 words): the single biggest thing to fix, in plain words.
+### Good
+2 bullets.
+### Fix
+2–3 bullets: "**habit (max 3 words)** — one plain sentence on why it hurts, then one short quote from me". Look at filler words, tics, long sentences, unclear points, language switching. Diagnose only, do NOT rewrite here.
+### Next meeting
+2 bullets, each an instruction starting with a verb, max 10 words.
 ### Say it now
 Pick my 2–3 weakest utterances and rewrite each so I can read it aloud right now. Keep the rewrite in the SAME language I originally spoke it in (not necessarily the output language). Format each as:
 - [HH:MM:SS] *original utterance, shortened if long*
 > improved sentence
 
-Honest but not harsh. No criticism without a quote.
+Rules: every bullet is ONE short sentence, max 12 words, everyday words, no jargon. Honest but not harsh. No criticism without a quote. Nothing outside this format, no preamble.
 
 --- Transcript ---
 ${renderedTranscriptText(m)}`;
@@ -464,7 +479,7 @@ async function renderHome() {
     btn.className = 'meeting-item';
     btn.style.setProperty('--i', Math.min(i, 8)); // 스태거는 앞 8개까지만
     const meta = [fmtDay(m.createdAt), `${n} speaker${n === 1 ? '' : 's'}`, fmtDuration(st.duration)].filter(Boolean).map(esc);
-    if (m.analyses?.mom) meta.push(`<span class="ok">${ICON_CHECK}Minutes</span>`);
+    if (m.analyses?.['mom:en'] || m.analyses?.['mom:ko'] || m.analyses?.mom) meta.push(`<span class="ok">${ICON_CHECK}Minutes</span>`);
     btn.innerHTML = `<strong>${esc(m.title)}</strong>
       <span class="meta">${meta.join('<i class="dot"></i>')}</span>
       <div class="fp" aria-hidden="true">${fpHtml(st)}</div>`;
@@ -944,6 +959,11 @@ function personKey() {
   const scope = [...document.querySelectorAll('#scopeList input:checked')].map(cb => cb.dataset.mid).sort();
   return `${sp}|${analysisLang}|${scope.join(',')}`;
 }
+// MoM·피드백은 언어별로 따로 보관: analyses['mom:en'], analyses['mom:ko'] … (옛 단일 저장 analyses.mom 호환)
+function analysisEntry(kind, lang = analysisLang, m = current) {
+  const a = m.analyses || {};
+  return a[`${kind}:${lang}`] || (a[kind]?.lang === lang ? a[kind] : null);
+}
 function currentPerson() {
   const p = current.analyses.persons?.[personKey()];
   if (p) return p;
@@ -973,8 +993,9 @@ async function renderAnalysis() {
   const my = mySpeaker(current);
   $('feedbackHint').hidden = !!my;
   $('btnFeedback').disabled = !my;
-  $('momOut').innerHTML = current.analyses.mom ? mdToHtml(current.analyses.mom.text) : '';
-  $('feedbackOut').innerHTML = current.analyses.feedback ? mdToHtml(current.analyses.feedback.text) : '';
+  const mom = analysisEntry('mom'), fb = analysisEntry('feedback');
+  $('momOut').innerHTML = mom ? mdToHtml(mom.text) : '';
+  $('feedbackOut').innerHTML = fb ? mdToHtml(fb.text) : '';
   renderPersonOut();
 }
 
@@ -1005,7 +1026,7 @@ async function runAnalysis(kind, btn) {
     const text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
     const entry = { text, lang: analysisLang, at: Date.now() };
     if (kind === 'person') { current.analyses.persons ||= {}; current.analyses.persons[key] = entry; }
-    else current.analyses[kind] = entry;
+    else current.analyses[`${kind}:${analysisLang}`] = entry;
     await DB.put(current);
     if (kind === 'person') renderPersonOut(); else outEl.innerHTML = mdToHtml(text);
     toast('Done');
@@ -1021,9 +1042,10 @@ async function runAnalysis(kind, btn) {
 function buildExport() {
   const parts = [`# ${current.title}\n${new Date(current.createdAt).toLocaleString(LOCALE)}`];
   if ($('expTranscript').checked) parts.push(`## Transcript (verbatim)\n\n${renderedTranscriptText(current)}`);
-  if ($('expMom').checked && current.analyses.mom) parts.push(current.analyses.mom.text);
+  const mom = analysisEntry('mom'), fb = analysisEntry('feedback');
+  if ($('expMom').checked && mom) parts.push(mom.text);
   if ($('expPerson').checked) { const p = currentPerson(); if (p) parts.push(p.text); }
-  if ($('expFeedback').checked && current.analyses.feedback) parts.push(current.analyses.feedback.text);
+  if ($('expFeedback').checked && fb) parts.push(fb.text);
   return parts.join('\n\n---\n\n');
 }
 function exportFileName() {
