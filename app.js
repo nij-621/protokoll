@@ -254,13 +254,13 @@ Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma
 Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 2–4 bullets with the main outcomes. No paragraphs.
 
 ## Discussion
-One bullet per topic: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Put details, numbers and who took which position in indented sub-bullets under the topic. Keep all numbers, dates, amounts, names.
+One bullet per topic: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Put details, numbers and who took which position in indented sub-bullets under the topic. Keep all numbers, dates, amounts, names. Every decision and action item below must have its context here; items that were decided with little discussion go under a final "- **Other** —" bullet, one sub-bullet each.
 
 ## Decisions
 One bullet per decision, most important first, prefixed with the person(s) who made or own it in square brackets: "- [Name] decision". Use "[All]" if the group decided jointly. Omit the bracket only if no one can be attributed.
 
 ## Action Items
-One bullet per action: "- [Owner] task (due YYYY-MM-DD)". Omit "(due …)" if no deadline was stated.
+One bullet per action: "- [Owner] task (due YYYY-MM-DD)". Convert relative deadlines ("next week", "end of October", "on the 6th") to a date counted from the Date line above. Omit "(due …)" only if no deadline was stated at all.
 
 ## Open Issues
 Unresolved points and follow-ups needed, one bullet each.
