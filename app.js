@@ -265,6 +265,12 @@ One bullet per action: "- [Owner] task (due YYYY-MM-DD)". Convert relative deadl
 ## Open Issues
 Unresolved points and follow-ups needed, one bullet each.
 
+Wording: the reader is tired and reads each line once — it must make sense on the first read.
+- Short sentences (max 15 words), one fact each. Active voice with a clear subject: "Anna sends the quote", not "The quote is to be sent".
+- Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word or verb.
+- Be concrete: who, what, how much, by when. Not "shipment issues were discussed" but "3 shipments are stuck in customs in Hamburg".
+- Replace jargon with plain words when the meaning is clear from the source. Keep names of people, companies, customers, products and projects (and their abbreviations) exactly as written.
+
 Rules: do not invent anything not in the transcript. If a section has nothing, write "- none". Output only the minutes, no preamble.
 
 --- Transcript ---
