@@ -250,6 +250,10 @@ input[type="text"], input[type="password"], textarea, select {
 .progress-foot .hint { margin: 0; }
 .progress-foot .btn { flex: none; }
 .hint { font-size: 13px; color: var(--ink-soft); margin: 8px 0; }
+.hint.warn { color: var(--danger); }
+.hint.warn ul { margin: 4px 0 0; padding-left: 18px; }
+.hint.warn li { margin: 2px 0; color: var(--ink-soft); }
+.hint .link { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
 
 /* 상세 */
 .detail-head { margin-bottom: 10px; }

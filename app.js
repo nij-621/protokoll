@@ -254,21 +254,35 @@ Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma
 Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 2–4 bullets with the main outcomes. No paragraphs.
 
 ## Discussion
-One bullet per topic: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Put details, numbers and who took which position in indented sub-bullets under the topic. Keep all numbers, dates, amounts, names. Every decision and action item below must have its context here; items that were decided with little discussion go under a final "- **Other** —" bullet, one sub-bullet each.
+One bullet per topic, in the order discussed: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Put details, numbers and who said what in indented sub-bullets — as many as needed. Keep all numbers, dates, amounts, names. Never merge two separate topics into one bullet. Cover the meeting to the very end: late topics get the same care as early ones. Every decision and action item below must have its context here; items with little discussion go under a final "- **Other** —" bullet, one sub-bullet each.
 
 ## Decisions
-One bullet per decision, most important first, prefixed with the person(s) who made or own it in square brackets: "- [Name] decision". Use "[All]" if the group decided jointly. Omit the bracket only if no one can be attributed.
+One bullet per decision, most important first: "- [Name] decision [time]". A decision is something the meeting settled — not an idea, a wish or an open question. [Name] = the person who gave the final yes; if someone else proposed it, add "(proposed by Name)". Use "[All]" if the group decided jointly.
 
 ## Action Items
-One bullet per action: "- [Owner] task (due YYYY-MM-DD)". Convert relative deadlines ("next week", "end of October", "on the 6th") to a date counted from the Date line above. Omit "(due …)" only if no deadline was stated at all.
+One bullet per task still to be done: "- [Owner] task [time] (due YYYY-MM-DD)".
+- Things already done ("I have sent", "I exported", "she shared") are not action items. Put them in Discussion.
+- Owner = the person who will do it: someone who says "I will …", or someone asked to do it who accepts or does not object. Work out who "you" is from the conversation — usually the person being answered or the one who replies. If it stays unclear, write "[?]".
+- If the task involves other people (a meeting, an email), name exactly the people the speaker named. Add no one.
+- Due: only if a deadline was stated. Convert clear relative dates ("next Wednesday", "over the weekend", "on Monday") to a date counted from the Date line above. Keep vague or hedged deadlines in words: "(due ~end of November, tbc)". Omit "(due …)" if no deadline was stated.
 
 ## Open Issues
 Unresolved points and follow-ups needed, one bullet each.
 
+[time] = the timestamp of the line where the decision was made or the task was agreed, copied exactly as written in the transcript, e.g. [37:24] or [01:02:15]. When the transcript has timestamps, every decision and action item needs one; if you cannot point to such a line, it is not a decision or action item. When it has none, leave [time] out.
+
+Accuracy comes before brevity:
+- Keep uncertainty. If the speaker hedges ("maybe", "I think", "about", "I need to check", a number said as a question), keep it: "about 2,000 EUR (tbc)". Never turn a guess into a fact, an exact number or an exact date.
+- Examples stay examples: "for example Saudi or Brazil" → "e.g. Saudi Arabia, Brazil". A story about one case is not a rule or a feature.
+- Report, don't judge. Match the speaker's strength of words: said, asked, proposed, agreed, decided. No "refused", "insisted", "ordered", "crisis", "stranded", "immediately" unless the speaker said so.
+- Credit each point to the person who actually said it. The proposer proposes; the person who says yes decides.
+- If someone corrects themselves ("Delete it. … No, exclude them."), use only the final version, and use the same words for the same item in every section.
+- A speaker still labelled "Speaker N" has no known name. Keep the label; do not guess a name.
+
 Wording: the reader is tired and reads each line once — it must make sense on the first read.
-- Short sentences (max 15 words), one fact each. Active voice with a clear subject: "Anna sends the quote", not "The quote is to be sent".
-- Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word or verb.
-- Be concrete: who, what, how much, by when. Not "shipment issues were discussed" but "3 shipments are stuck in customs in Hamburg".
+- Short sentences (max 20 words), one fact each. Active voice when the speaker made clear who does what.
+- Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word.
+- Be concrete — who, what, how much, by when — but only as precise as the speaker was.
 - Replace jargon with plain words when the meaning is clear from the source. Keep names of people, companies, customers, products and projects (and their abbreviations) exactly as written.
 
 Rules: do not invent anything not in the transcript. If a section has nothing, write "- none". Output only the minutes, no preamble.
@@ -975,6 +989,42 @@ function currentPerson() {
   if (p) return p;
   return current.analyses.person || null; // 옛 버전(단일 저장) 호환
 }
+// MoM 프롬프트 판: 2 = Decisions·Action Items에 근거 [시각]을 붙이는 판 (2026-11-06). 그 이전 MoM은 시각 검사 안 함
+const MOM_V = 2;
+
+// 이름 없는 화자 중 말을 꽤 한 사람(발언량 2% 이상) — 이름이 없으면 MoM이 담당자를 추측하다 틀린다
+function unnamedSpeakers(m) {
+  const st = meetingStats(m);
+  const total = Object.values(st.chars).reduce((a, b) => a + b, 0) || 1;
+  return st.ids.filter(sp => !m.speakers?.[sp]?.name && st.chars[sp] / total >= 0.02);
+}
+
+// Decisions·Action Items 줄마다 [시각]이 전사본에 실제로 있는 시각인지 — 없으면 근거 없는 항목으로 표시 (API 호출 없음)
+function momCheck(text, m) {
+  const times = new Set(parseTranscript(m.raw).filter(l => l.time).map(l => parseTime(l.time)));
+  const bad = [];
+  let sec = '';
+  for (const line of text.split('\n')) {
+    const h = line.match(/^#{1,4}\s*(.+?)\s*$/);
+    if (h) { sec = h[1]; continue; }
+    if (sec !== 'Decisions' && sec !== 'Action Items') continue;
+    const b = line.match(/^\s*[-*]\s+(.*)$/);
+    if (!b || /^none\.?$/i.test(b[1].trim())) continue;
+    const ts = [...b[1].matchAll(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g)].map(x => parseTime(x[1]));
+    if (!ts.some(t => times.has(t))) bad.push(b[1]);
+  }
+  return bad;
+}
+
+function renderMomCheck(entry) {
+  const bad = entry && entry.v >= MOM_V ? momCheck(entry.text, current) : [];
+  const box = $('momCheck');
+  box.hidden = !bad.length;
+  box.innerHTML = bad.length
+    ? `${bad.length} item${bad.length > 1 ? 's' : ''} without a matching transcript time — check ${bad.length > 1 ? 'them' : 'it'} against the transcript:<ul>${bad.map(b => `<li>${esc(b)}</li>`).join('')}</ul>`
+    : '';
+}
+
 function renderPersonOut() {
   const p = currentPerson();
   $('personOut').innerHTML = p ? mdToHtml(p.text) : '';
@@ -999,8 +1049,15 @@ async function renderAnalysis() {
   const my = mySpeaker(current);
   $('feedbackHint').hidden = !!my;
   $('btnFeedback').disabled = !my;
+  const unnamed = unnamedSpeakers(current);
+  $('momHint').hidden = !unnamed.length;
+  $('momHint').innerHTML = unnamed.length
+    ? `${esc(unnamed.join(', '))} ${unnamed.length > 1 ? 'have' : 'has'} no name — the minutes may give tasks to the wrong person. <button type="button" class="link" id="momHintGo">Name speakers</button>`
+    : '';
+  if (unnamed.length) $('momHintGo').onclick = () => switchTab('speakers');
   const mom = analysisEntry('mom'), fb = analysisEntry('feedback');
   $('momOut').innerHTML = mom ? mdToHtml(mom.text) : '';
+  renderMomCheck(mom);
   $('feedbackOut').innerHTML = fb ? mdToHtml(fb.text) : '';
   renderPersonOut();
 }
@@ -1008,6 +1065,11 @@ async function renderAnalysis() {
 async function runAnalysis(kind, btn) {
   if (!settings.apiKey) { toast('Enter your API key in Settings'); return; }
   if (btn.disabled) return;
+  if (kind === 'mom') {
+    const unnamed = unnamedSpeakers(current);
+    if (unnamed.length && !confirm(`${unnamed.join(', ')} ${unnamed.length > 1 ? 'have' : 'has'} no name. The minutes may give tasks to the wrong person.\n\nGenerate anyway?`)) { switchTab('speakers'); return; }
+    $('momCheck').hidden = true;
+  }
   const outEl = $({ mom: 'momOut', person: 'personOut', feedback: 'feedbackOut' }[kind]);
   btn.disabled = true;
   const oldLabel = btn.textContent;
@@ -1031,10 +1093,12 @@ async function runAnalysis(kind, btn) {
     }
     const text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
     const entry = { text, lang: analysisLang, at: Date.now() };
+    if (kind === 'mom') entry.v = MOM_V;
     if (kind === 'person') { current.analyses.persons ||= {}; current.analyses.persons[key] = entry; }
     else current.analyses[`${kind}:${analysisLang}`] = entry;
     await DB.put(current);
     if (kind === 'person') renderPersonOut(); else outEl.innerHTML = mdToHtml(text);
+    if (kind === 'mom') renderMomCheck(entry);
     toast('Done');
   } catch (e) {
     toast(e.message, 5000);
