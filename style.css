@@ -253,6 +253,10 @@ input[type="text"], input[type="password"], textarea, select {
 .hint.warn { color: var(--danger); }
 .hint.warn ul { margin: 4px 0 0; padding-left: 18px; }
 .hint.warn li { margin: 2px 0; color: var(--ink-soft); }
+.tref { background: none; border: 0; padding: 0 2px; font: 12px var(--mono); color: var(--petrol); text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+.tl.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: var(--petrol-soft); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .tl.flash { animation: none; background: var(--petrol-soft); } }
 .hint .link { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
 
 /* 상세 */

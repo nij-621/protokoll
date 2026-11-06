@@ -999,9 +999,18 @@ function unnamedSpeakers(m) {
   return st.ids.filter(sp => !m.speakers?.[sp]?.name && st.chars[sp] / total >= 0.02);
 }
 
-// Decisions·Action Items 줄마다 [시각]이 전사본에 실제로 있는 시각인지 — 없으면 근거 없는 항목으로 표시 (API 호출 없음)
+// sec 시각에 말하고 있던 전사 줄 (그 시각 이전에 시작한 마지막 줄). 회의 범위 밖이면 null
+// 모델은 긴 발언 안의 시각을 어림해 적기도 해서(2026-11-06 테스트: 3~48초 차이) 정확히 일치하지 않아도 그 발언으로 본다
+function lineAt(m, sec) {
+  const lines = parseTranscript(m.raw).filter(l => l.time);
+  let hit = null;
+  for (const l of lines) { if (parseTime(l.time) <= sec) hit = l; else break; }
+  if (!hit || sec > parseTime(lines[lines.length - 1].time) + 120) return null;
+  return hit;
+}
+
+// Decisions·Action Items 줄마다 [시각]이 있고 회의 안의 시각인지 — 없으면 근거 없는 항목으로 표시 (API 호출 없음)
 function momCheck(text, m) {
-  const times = new Set(parseTranscript(m.raw).filter(l => l.time).map(l => parseTime(l.time)));
   const bad = [];
   let sec = '';
   for (const line of text.split('\n')) {
@@ -1011,9 +1020,24 @@ function momCheck(text, m) {
     const b = line.match(/^\s*[-*]\s+(.*)$/);
     if (!b || /^none\.?$/i.test(b[1].trim())) continue;
     const ts = [...b[1].matchAll(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g)].map(x => parseTime(x[1]));
-    if (!ts.some(t => times.has(t))) bad.push(b[1]);
+    if (!ts.some(t => lineAt(m, t))) bad.push(b[1]);
   }
   return bad;
+}
+
+// MoM 안의 [시각]을 버튼으로 — 누르면 전사본의 그 발언으로 이동해 근거를 바로 확인
+function linkTimes(html) {
+  return html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (s, t) => `<button type="button" class="tref" data-t="${parseTime(t)}" title="Show in transcript">${s}</button>`);
+}
+function jumpToTime(sec) {
+  const l = lineAt(current, sec);
+  if (!l) { toast('That time is not in the transcript'); return; }
+  switchTab('transcript');
+  const row = document.querySelector(`#pane-transcript .tstamp[data-raw="${l.rawIdx}"]`)?.closest('.tl');
+  if (!row) return;
+  row.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+  clearTimeout(row._flash); row._flash = setTimeout(() => row.classList.remove('flash'), 1600);
 }
 
 function renderMomCheck(entry) {
@@ -1056,7 +1080,7 @@ async function renderAnalysis() {
     : '';
   if (unnamed.length) $('momHintGo').onclick = () => switchTab('speakers');
   const mom = analysisEntry('mom'), fb = analysisEntry('feedback');
-  $('momOut').innerHTML = mom ? mdToHtml(mom.text) : '';
+  $('momOut').innerHTML = mom ? linkTimes(mdToHtml(mom.text)) : '';
   renderMomCheck(mom);
   $('feedbackOut').innerHTML = fb ? mdToHtml(fb.text) : '';
   renderPersonOut();
@@ -1098,7 +1122,7 @@ async function runAnalysis(kind, btn) {
     else current.analyses[`${kind}:${analysisLang}`] = entry;
     await DB.put(current);
     if (kind === 'person') renderPersonOut(); else outEl.innerHTML = mdToHtml(text);
-    if (kind === 'mom') renderMomCheck(entry);
+    if (kind === 'mom') { outEl.innerHTML = linkTimes(outEl.innerHTML); renderMomCheck(entry); }
     toast('Done');
   } catch (e) {
     toast(e.message, 5000);
@@ -1245,6 +1269,7 @@ function bind() {
   $('personSel').onchange = renderPersonOut;
   $('scopeList').onchange = renderPersonOut;
   $('btnMom').onclick = e => runAnalysis('mom', e.target);
+  $('momOut').onclick = e => { const b = e.target.closest('.tref'); if (b) jumpToTime(+b.dataset.t); };
   $('btnPerson').onclick = e => runAnalysis('person', e.target);
   $('btnFeedback').onclick = e => runAnalysis('feedback', e.target);
 
