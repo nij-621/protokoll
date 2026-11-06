@@ -125,10 +125,10 @@ async function deleteRemoteFile(name) {
   try { await fetch(`${API}/v1beta/${name}`, { method: 'DELETE', headers: authHeaders() }); } catch {}
 }
 
-async function streamGenerate(parts, priorTurns, onText, signal) {
+async function streamGenerate(parts, priorTurns, onText, signal, config = {}) {
   const body = {
     contents: [...priorTurns, { role: 'user', parts }],
-    generationConfig: { maxOutputTokens: 65536 },
+    generationConfig: { maxOutputTokens: 65536, ...config },
     safetySettings: SAFETY_OFF,
   };
   const r = await fetch(`${API}/v1beta/models/${settings.model}:streamGenerateContent?alt=sse`, {
@@ -178,7 +178,7 @@ async function streamGenerate(parts, priorTurns, onText, signal) {
 }
 
 // MAX_TOKENS로 잘리면 이어쓰기 요청을 반복해 전체를 받는다
-async function generateFull(parts, onText, signal) {
+async function generateFull(parts, onText, signal, config) {
   let turns = [], all = '';
   for (let round = 0; round < 8; round++) {
     const userParts = round === 0 ? parts
@@ -186,7 +186,7 @@ async function generateFull(parts, onText, signal) {
     let result;
     for (let attempt = 0; ; attempt++) {
       try {
-        result = await streamGenerate(userParts, turns, t => onText && onText(all + t), signal);
+        result = await streamGenerate(userParts, turns, t => onText && onText(all + t), signal, config);
         break;
       } catch (e) {
         if (!e.blocked || attempt >= BLOCK_RETRIES || signal?.aborted) throw e;
@@ -289,6 +289,217 @@ Rules: do not invent anything not in the transcript. If a section has nothing, w
 
 --- Transcript ---
 ${renderedTranscriptText(m)}`;
+}
+
+/* ---------- MoM 2단계 (P1, 2026-11-06) ----------
+   1) extractPrompt: 전사본 → 항목 원장(JSON, 항목마다 원문 인용·시각·화자·담당 근거)
+   2) 코드가 인용을 전사본에서 찾아 시각을 실제 줄로 고치고, 담당자가 그 줄의 화자인지 확인
+   3) renderPrompt: 원장 → Summary·Discussion·Open Issues. Decisions·Action Items는 코드가 원장에서 직접 만든다
+   momPrompt(한 번에 쓰기)는 원장 추출이 실패했을 때의 대체 경로이자 minutes-archive 템플릿과의 동기화 기준.
+   .grill/mom-eval/run.ps1이 이 프롬프트·스키마를 그대로 읽어 테스트한다 — 바꾸면 그쪽 PowerShell 조립 로직도 확인할 것 */
+function extractPrompt(m, lang) {
+  return `Below is the transcript of a meeting that may mix English, German, Korean, Chinese and Japanese. Meeting date: ${isoDate(m.createdAt)}.
+Read it from the first line to the very last and list every item worth keeping in the minutes, in the order they come up. Return JSON matching the schema.
+
+Kinds:
+- "decision": something the meeting settled — a final yes, a rule confirmed. A yes to someone else's proposal ("Yes", "Let's do that") and a clear no ("No, not yet") are decisions too. Not an idea, a wish or an open question.
+- "action": a task still to be done after the meeting.
+- "done": something already done before or during the meeting ("I have sent", "I exported", "she shared"). Never an action.
+- "open": an unresolved question, or a follow-up nobody took.
+- "fact": a number, status, problem, opinion or proposal worth knowing.
+
+Fields for every item:
+- topic: short topic name, max 4 words. Items of the same topic share the same name.
+- time: the timestamp of the transcript line the item comes from, copied exactly (e.g. "37:24").
+- quote: the key words of that ONE line, copied verbatim in the original language, 4–20 words. Do not fix grammar or join words from other lines.
+- said_by: the speaker of that line, exactly as labelled.
+- text: the item as one short, plain sentence in ${langName(lang)}. Keep hedges ("maybe", "about", "I need to check" → "about 2,000 EUR, tbc"). Examples stay examples ("e.g."). Use neutral verbs: said, asked, proposed, agreed, decided.
+- hedged: true if the speaker was unsure about it.
+
+Decisions only:
+- decided_by: who gave the final yes ("All" if the group agreed). proposed_by: who proposed it, if that was someone else.
+
+Actions only:
+- text: the task itself without the owner's name, starting with a verb ("Email the TLMs for a yes/no decision") — the owner is shown separately.
+- owner: the person who will do it — someone who says "I will …", or who is asked and then accepts ("Yes", "Okay", "I will"). "Mhm" or "uh-huh" alone is not acceptance. Work out who "you" is from who is being spoken to and who answers. A listener's "Mhm" does not make them the one being spoken to — "you" is usually the person who has been discussing this topic with the speaker and who answers in words. Use "?" if it stays unclear.
+- In "with" and in the text, "you" follows the same rule.
+- owner_time, owner_quote: the line where the owner commits or accepts, verbatim. If the owner is not in the meeting, the line where the task was given to them.
+- with: people the task involves (meeting attendees, email recipients), exactly as the speaker named them. Add no one.
+- due_date: YYYY-MM-DD, only if a clear deadline was said ("next Wednesday", "over the weekend", "on Monday"), counted from the meeting date.
+- due_words: the deadline in the speaker's words if it was vague or hedged ("maybe end of November"); otherwise leave empty.
+
+Coverage: one item per distinct point — split a line that holds two facts, numbers or tasks into two items. A one-hour meeting usually gives 60–120 items. The last third of the meeting matters as much as the first — do not stop early. Skip only greetings and private small talk with no work content.
+A speaker still labelled "Speaker N" has no known name: keep the label, do not guess.
+
+--- Transcript ---
+${renderedTranscriptText(m)}`;
+}
+
+// SCHEMA-BEGIN (순수 JSON — run.ps1이 그대로 읽는다)
+const EXTRACT_SCHEMA = {
+  "type": "OBJECT",
+  "properties": {
+    "items": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "kind": { "type": "STRING", "enum": ["decision", "action", "done", "open", "fact"] },
+          "topic": { "type": "STRING" },
+          "time": { "type": "STRING" },
+          "quote": { "type": "STRING" },
+          "said_by": { "type": "STRING" },
+          "text": { "type": "STRING" },
+          "hedged": { "type": "BOOLEAN" },
+          "decided_by": { "type": "STRING" },
+          "proposed_by": { "type": "STRING" },
+          "owner": { "type": "STRING" },
+          "owner_time": { "type": "STRING" },
+          "owner_quote": { "type": "STRING" },
+          "with": { "type": "ARRAY", "items": { "type": "STRING" } },
+          "due_date": { "type": "STRING" },
+          "due_words": { "type": "STRING" }
+        },
+        "required": ["kind", "topic", "time", "quote", "said_by", "text"],
+        "propertyOrdering": ["kind", "topic", "time", "quote", "said_by", "text", "hedged", "decided_by", "proposed_by", "owner", "owner_time", "owner_quote", "with", "due_date", "due_words"]
+      }
+    }
+  },
+  "required": ["items"]
+};
+// SCHEMA-END
+
+function renderPrompt(m, lang, attendees, itemsText) {
+  return `Below is a checked list of items from a meeting, in the order they were discussed. Write the first part of the Minutes of Meeting in EXACTLY the format below. Section headings and field labels must stay in English verbatim; write the content in ${langName(lang)}.
+
+# Minutes: ${m.title}
+Date: ${isoDate(m.createdAt)}
+Attendees: ${attendees}
+Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma-separated
+
+## Summary
+Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 2–4 bullets with the main outcomes. No paragraphs.
+
+## Discussion
+One bullet per topic, in the list's order: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Under it, one indented sub-bullet per item of that topic. Every item in the list must appear exactly once; add nothing that is not in the list. Keep each item's numbers, names, hedges ("about", "tbc"), "e.g." and who said it. Write "done" items in the past tense. Decisions and actions are listed separately later — use the same words here.
+
+## Open Issues
+The "open" items, one bullet each. Keep their hedges. If there are none, write "- none".
+
+Accuracy comes before brevity:
+- Never turn a hedge into a fact, an exact number or an exact date.
+- Report, don't judge: no "refused", "insisted", "ordered", "crisis", "stranded", "immediately" unless the item says so.
+- Credit each item to the person it names. A speaker labelled "Speaker N" keeps that label.
+
+Wording: the reader is tired and reads each line once — it must make sense on the first read.
+- Short sentences (max 20 words), one fact each.
+- Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word.
+- Keep names of people, companies, customers, products and projects (and their abbreviations) exactly as written.
+
+Output only the sections above — no Decisions or Action Items section, no preamble.
+
+--- Items (time · kind · said by · text) ---
+${itemsText}`;
+}
+
+const normQ = s => (s || '').toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const BACKCHANNEL = /^(mhm|mm|hm|uh huh|mm hmm|aha|ah)$/;
+
+// 인용문이 들어 있는 전사 줄 — 여러 개면 적힌 시각에 가장 가까운 줄. 못 찾으면 첫 6단어로 한 번 더
+// 모델이 두 줄을 이어 붙여 인용하기도 해서(2026-11-06 테스트) 문장 단위로 나눠서도 찾는다
+function findQuoteLine(lines, quote, sec) {
+  const q = normQ(quote);
+  if (q.length < 2) return null;
+  const parts = String(quote).split(/(?<=[.!?…])\s+|\.{3}/).map(normQ).filter(p => p && p !== q);
+  const tries = [q, ...parts, q.split(' ').slice(0, 6).join(' ')];
+  for (const t of tries) {
+    let best = null, bestD = Infinity;
+    for (const l of lines) {
+      if (!normQ(l.text).includes(t)) continue;
+      const d = Math.abs(parseTime(l.time) - sec);
+      if (d < bestD) { best = l; bestD = d; }
+    }
+    // 짧은 인용("Yeah")은 어디에나 있으니 적힌 시각 근처(1분)만 인정
+    if (best && (t.split(' ').length >= 4 || bestD <= 60)) return best;
+  }
+  return null;
+}
+
+// 원장 검증: 시각을 실제 줄로 맞추고, 담당자가 수락한 줄의 화자인지 확인. issues = 사람이 확인할 것
+function checkLedger(m, items) {
+  const lines = parseTranscript(m.raw).filter(l => l.time);
+  const names = new Set(speakerIds(m).map(sp => displayName(m, sp)));
+  const speakerOf = l => displayName(m, l.speaker);
+  const issues = [];
+  for (const it of items) {
+    const sec = parseTime(String(it.time || '').replace(/[[\]]/g, ''));
+    const hit = findQuoteLine(lines, it.quote, sec);
+    if (hit) { it.time = hit.time; it.verified = true; }
+    else if (lineAt(m, sec)) it.verified = false;
+    else { it.verified = false; it.time = ''; }
+    if ((it.kind === 'decision' || it.kind === 'action') && !hit) issues.push(`Quote not found in the transcript: ${it.text}`);
+    if (it.kind !== 'action') continue;
+    it.owner = (it.owner || '').trim() || '?';
+    if (it.owner === '?' || !names.has(it.owner)) continue;   // 회의에 없는 사람(예: Timmy)은 확인 불가
+    const osec = parseTime(String(it.owner_time || it.time || '').replace(/[[\]]/g, ''));
+    const oline = findQuoteLine(lines, it.owner_quote, osec);
+    if (!oline) continue;
+    if (speakerOf(oline) !== it.owner || BACKCHANNEL.test(normQ(oline.text))) {
+      issues.push(`Owner unclear — ${it.owner} given, but [${oline.time}] "${oline.text.slice(0, 60)}" is ${speakerOf(oline)}: ${it.text}`);
+      it.owner = '?';
+    } else it.agreed_time = oline.time;
+  }
+  return issues;
+}
+
+// 원장 → Decisions·Action Items 줄 (형식은 minutes-archive TEMPLATE.md 그대로)
+function ledgerSections(items) {
+  const t = it => it.time ? ` [${it.time}]` : '';
+  const dec = items.filter(i => i.kind === 'decision').map(i => {
+    const by = (i.decided_by || '').trim() || 'All';
+    const prop = i.proposed_by && i.proposed_by.trim() && i.proposed_by.trim() !== by ? ` (proposed by ${i.proposed_by.trim()})` : '';
+    return `- [${by}] ${i.text.trim().replace(/\.$/, '')}${prop}${t(i)}`;
+  });
+  const act = items.filter(i => i.kind === 'action').map(i => {
+    const due = /^\d{4}-\d{2}-\d{2}$/.test(i.due_date || '') ? ` (due ${i.due_date})` : (i.due_words || '').trim() ? ` (due ~${i.due_words.trim()}, tbc)` : '';
+    return `- [${i.owner}] ${i.text.trim().replace(/\.$/, '')}${t({ time: i.agreed_time || i.time })}${due}`;
+  });
+  return `## Decisions\n${dec.join('\n') || '- none'}\n\n## Action Items\n${act.join('\n') || '- none'}\n`;
+}
+
+function ledgerText(items) {
+  return items.map(i => {
+    const who = i.kind === 'action' ? ` · owner ${i.owner}` : i.kind === 'decision' ? ` · decided by ${i.decided_by || 'All'}${i.proposed_by ? `, proposed by ${i.proposed_by}` : ''}` : '';
+    return `[${i.time || '?'}] ${i.kind} · ${i.topic} · ${i.said_by}${who} · ${i.text}`;
+  }).join('\n');
+}
+
+// 렌더 결과(머리·Summary·Discussion·Open Issues)에 코드가 만든 Decisions·Action Items를 Open Issues 앞에 끼운다
+function assembleMinutes(rendered, items) {
+  const body = rendered.replace(/^\s*#{1,4}\s*(Decisions?|Action Items?)\s*$[\s\S]*?(?=^\s*#{1,4}\s|$(?![\s\S]))/gim, '').trim();
+  const sections = ledgerSections(items);
+  const i = body.search(/^\s*#{1,4}\s*Open Issues?\s*$/im);
+  return i >= 0 ? `${body.slice(0, i).trimEnd()}\n\n${sections}\n${body.slice(i)}` : `${body}\n\n${sections}\n## Open Issues\n- none`;
+}
+
+function attendeesOf(m) {
+  return speakerIds(m).map(sp => displayName(m, sp)).join(', ');
+}
+
+// 2단계 MoM 생성. onProgress(stage, text) — stage 1: 추출 중(원문 JSON), 2: 쓰는 중(마크다운)
+async function generateMinutes(m, lang, onProgress, signal) {
+  const raw = await generateFull([{ text: extractPrompt(m, lang) }], t => onProgress(1, t), signal,
+    { responseMimeType: 'application/json', responseSchema: EXTRACT_SCHEMA });
+  let items;
+  try { items = JSON.parse(raw).items; } catch { items = null; }
+  if (!Array.isArray(items) || !items.length) throw Object.assign(new Error('Could not read the item list'), { ledgerFailed: true });
+  const issues = checkLedger(m, items);
+  // 쓰기 단계는 원장을 옮겨 적는 일이라 깊은 생각이 필요 없다 — 테스트에서 생각 토큰이 1.4~2.4만 개였음. 낮춤이 안 되는 모델이면 기본값으로
+  const rp = [{ text: renderPrompt(m, lang, attendeesOf(m), ledgerText(items)) }];
+  let rendered;
+  try { rendered = await generateFull(rp, t => onProgress(2, t), signal, { thinkingConfig: { thinkingLevel: 'low' } }); }
+  catch (e) { if (!/thinking/i.test(e.message)) throw e; rendered = await generateFull(rp, t => onProgress(2, t), signal); }
+  return { text: assembleMinutes(rendered, items), ledger: items, issues };
 }
 
 function personPrompt(name, sources, lang) {
@@ -1041,11 +1252,12 @@ function jumpToTime(sec) {
 }
 
 function renderMomCheck(entry) {
-  const bad = entry && entry.v >= MOM_V ? momCheck(entry.text, current) : [];
+  const bad = (entry && entry.v >= MOM_V ? momCheck(entry.text, current) : []).map(b => `No transcript time: ${b}`);
+  const all = [...(entry?.issues || []), ...bad];
   const box = $('momCheck');
-  box.hidden = !bad.length;
-  box.innerHTML = bad.length
-    ? `${bad.length} item${bad.length > 1 ? 's' : ''} without a matching transcript time — check ${bad.length > 1 ? 'them' : 'it'} against the transcript:<ul>${bad.map(b => `<li>${esc(b)}</li>`).join('')}</ul>`
+  box.hidden = !all.length;
+  box.innerHTML = all.length
+    ? `Check ${all.length} item${all.length > 1 ? 's' : ''} against the transcript:<ul>${all.map(b => `<li>${linkTimes(esc(b))}</li>`).join('')}</ul>`
     : '';
 }
 
@@ -1115,8 +1327,23 @@ async function runAnalysis(kind, btn) {
       const my = mySpeaker(current);
       prompt = feedbackPrompt(displayName(current, my), current, analysisLang);
     }
-    const text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
-    const entry = { text, lang: analysisLang, at: Date.now() };
+    let text, extra = {};
+    if (kind === 'mom') {
+      // 2단계: 항목 원장 추출 → 코드 검증 → 쓰기. 원장이 깨지면 한 번에 쓰기로 대체
+      try {
+        const r = await generateMinutes(current, analysisLang, (stage, t) => {
+          outEl.innerHTML = stage === 1
+            ? `<p class="hint">Step 1 of 2 — collecting items from the transcript… ${(t.match(/"kind"/g) || []).length} found</p>`
+            : `<p class="hint">Step 2 of 2 — writing the minutes…</p>${mdToHtml(t)}`;
+        });
+        text = r.text; extra = { pipeline: 'ledger', ledger: r.ledger, issues: r.issues };
+      } catch (e) {
+        if (!e.ledgerFailed) throw e;
+        toast('Item list failed — writing the minutes in one pass instead', 4000);
+        text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
+      }
+    } else text = await generateFull([{ text: prompt }], t => { outEl.innerHTML = mdToHtml(t); });
+    const entry = { text, lang: analysisLang, at: Date.now(), ...extra };
     if (kind === 'mom') entry.v = MOM_V;
     if (kind === 'person') { current.analyses.persons ||= {}; current.analyses.persons[key] = entry; }
     else current.analyses[`${kind}:${analysisLang}`] = entry;
@@ -1269,7 +1496,7 @@ function bind() {
   $('personSel').onchange = renderPersonOut;
   $('scopeList').onchange = renderPersonOut;
   $('btnMom').onclick = e => runAnalysis('mom', e.target);
-  $('momOut').onclick = e => { const b = e.target.closest('.tref'); if (b) jumpToTime(+b.dataset.t); };
+  $('momOut').onclick = $('momCheck').onclick = e => { const b = e.target.closest('.tref'); if (b) jumpToTime(+b.dataset.t); };
   $('btnPerson').onclick = e => runAnalysis('person', e.target);
   $('btnFeedback').onclick = e => runAnalysis('feedback', e.target);
 
