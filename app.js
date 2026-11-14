@@ -247,17 +247,17 @@ Write complete Minutes of Meeting in EXACTLY the format below. Section headings 
 
 # Minutes: ${m.title}
 Date: ${isoDate(m.createdAt)}
-Attendees: comma-separated names as they appear in the transcript
+Attendees: comma-separated names as they appear in the transcript; leave out speakers still labelled "Speaker N"
 Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma-separated
 
 ## Summary
-Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 2–4 bullets with the main outcomes. No paragraphs.
+Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 3–5 bullets with what the reader must know: outcomes, key numbers, reasons. Someone who reads only the Summary should know what happened. No paragraphs.
 
 ## Discussion
-One bullet per topic, in the order discussed: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Put details, numbers and who said what in indented sub-bullets — as many as needed. Keep all numbers, dates, amounts, names. Never merge two separate topics into one bullet. Cover the meeting to the very end: late topics get the same care as early ones. Every decision and action item below must have its context here; items with little discussion go under a final "- **Other** —" bullet, one sub-bullet each.
+Group by topic, not by time: one bullet per topic, even if it came up several times. At most 8 topics, most important first; merge small related topics, never unrelated ones. Format: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Under it, at most 4 indented sub-bullets with the details that matter: numbers, reasons, who held which position. Keep every number, date, amount and name you use exactly. Leave out small talk, step-by-step demos, repeated points and details that change nothing. Cover the meeting to the very end: late topics get the same care as early ones. Every decision and action item below must have its context here; those with little discussion go under a final "- **Other** —" bullet. A separate conversation after the meeting has ended goes under "- **After the meeting** —".
 
 ## Decisions
-One bullet per decision, most important first: "- [Name] decision [time]". A decision is something the meeting settled — not an idea, a wish or an open question. [Name] = the person who gave the final yes; if someone else proposed it, add "(proposed by Name)". Use "[All]" if the group decided jointly.
+One bullet per decision, most important first: "- [Name] decision [time]". A decision is something the meeting settled — not an idea, a wish or an open question. What a tool, screen or AI shows during a demo, and a setting or rule that already existed, are not decisions. [Name] = the person who gave the final yes; if someone else proposed it, add "(proposed by Name)". A question is not a proposal: if A asks "Are we meeting next week?" and B says "No", write "[B]" with no "proposed by". Use "[All]" if the group decided jointly.
 
 ## Action Items
 One bullet per task still to be done: "- [Owner] task [time] (due YYYY-MM-DD)".
@@ -267,7 +267,7 @@ One bullet per task still to be done: "- [Owner] task [time] (due YYYY-MM-DD)".
 - Due: only if a deadline was stated. Convert clear relative dates ("next Wednesday", "over the weekend", "on Monday") to a date counted from the Date line above. Keep vague or hedged deadlines in words: "(due ~end of November, tbc)". Omit "(due …)" if no deadline was stated.
 
 ## Open Issues
-Unresolved points and follow-ups needed, one bullet each.
+Unresolved questions, proposals nobody accepted or rejected, ideas that still need someone's yes (e.g. IT approval), and follow-ups nobody took — one bullet each, most important first, max 6. Write "- none" only if nothing is open.
 
 [time] = the timestamp of the line where the decision was made or the task was agreed, copied exactly as written in the transcript, e.g. [37:24] or [01:02:15]. When the transcript has timestamps, every decision and action item needs one; if you cannot point to such a line, it is not a decision or action item. When it has none, leave [time] out.
 
@@ -275,13 +275,16 @@ Accuracy comes before brevity:
 - Keep uncertainty. If the speaker hedges ("maybe", "I think", "about", "I need to check", a number said as a question), keep it: "about 2,000 EUR (tbc)". Never turn a guess into a fact, an exact number or an exact date.
 - Examples stay examples: "for example Saudi or Brazil" → "e.g. Saudi Arabia, Brazil". A story about one case is not a rule or a feature.
 - Report, don't judge. Match the speaker's strength of words: said, asked, proposed, agreed, decided. No "refused", "insisted", "ordered", "crisis", "stranded", "immediately" unless the speaker said so.
-- Credit each point to the person who actually said it. The proposer proposes; the person who says yes decides.
+- When you name who said something, name the person who actually said it. The proposer proposes; the person who says yes decides.
+- Keep each fact with its own subject: when a speaker compares two things, do not move the limits or numbers of one to the other.
+- What a tool, screen or AI says during a demo is its output, not something the meeting said, decided or assigned.
 - If someone corrects themselves ("Delete it. … No, exclude them."), use only the final version, and use the same words for the same item in every section.
 - A speaker still labelled "Speaker N" has no known name. Keep the label; do not guess a name.
 
 Wording: the reader is tired and reads each line once — it must make sense on the first read.
 - Short sentences (max 20 words), one fact each. Active voice when the speaker made clear who does what.
 - Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word.
+- Write the fact itself, not "X said that …". Name a person only for opinions, proposals, disagreements and commitments.
 - Be concrete — who, what, how much, by when — but only as precise as the speaker was.
 - Replace jargon with plain words when the meaning is clear from the source. Keep names of people, companies, customers, products and projects (and their abbreviations) exactly as written.
 
@@ -302,10 +305,11 @@ function extractPrompt(m, lang) {
 Read it from the first line to the very last and list every item worth keeping in the minutes, in the order they come up. Return JSON matching the schema.
 
 Kinds:
-- "decision": something the meeting settled — a final yes, a rule confirmed. A yes to someone else's proposal ("Yes", "Let's do that") and a clear no ("No, not yet") are decisions too. Not an idea, a wish or an open question.
+- "decision": something the meeting settled — a final yes, a rule confirmed. A yes to someone else's proposal ("Yes", "Let's do that") and a clear no ("No, not yet") are decisions too. Not an idea, a wish or an open question. A question is not a proposal: if A asks "Are we meeting next week?" and B says "No", B decided it and there is no proposed_by.
 - "action": a task still to be done after the meeting.
 - "done": something already done before or during the meeting ("I have sent", "I exported", "she shared"). Never an action.
-- "open": an unresolved question, or a follow-up nobody took.
+- "open": an unresolved question, a proposal nobody accepted or rejected, an idea that still needs someone's yes (e.g. IT approval), or a follow-up nobody took. A speaker's own "I will …" (also "I will discuss it with X") is an action, not open.
+What a tool, screen or AI shows or says during a demo (a to-do it lists, a deadline it sets, a note it saves) is a "fact" about the demo — never a decision, action or open item of this meeting. A setting or rule that already existed before the meeting is "done", not a decision.
 - "fact": a number, status, problem, opinion or proposal worth knowing.
 
 Fields for every item:
@@ -313,7 +317,7 @@ Fields for every item:
 - time: the timestamp of the transcript line the item comes from, copied exactly (e.g. "37:24").
 - quote: the key words of that ONE line, copied verbatim in the original language, 4–20 words. Do not fix grammar or join words from other lines.
 - said_by: the speaker of that line, exactly as labelled.
-- text: the item as one short, plain sentence in ${langName(lang)}. Keep hedges ("maybe", "about", "I need to check" → "about 2,000 EUR, tbc"). Examples stay examples ("e.g."). Use neutral verbs: said, asked, proposed, agreed, decided.
+- text: the item as one short, plain sentence in ${langName(lang)}. Keep hedges ("maybe", "about", "I need to check" → "about 2,000 EUR, tbc"). Examples stay examples ("e.g."). Use neutral verbs: said, asked, proposed, agreed, decided. Keep each fact with its own subject: when a speaker compares two things (e.g. two tools), do not move the limits of one to the other.
 - hedged: true if the speaker was unsure about it.
 
 Decisions only:
@@ -328,7 +332,7 @@ Actions only:
 - due_date: YYYY-MM-DD, only if a clear deadline was said ("next Wednesday", "over the weekend", "on Monday"), counted from the meeting date.
 - due_words: the deadline in the speaker's words if it was vague or hedged ("maybe end of November"); otherwise leave empty.
 
-Coverage: one item per distinct point — split a line that holds two facts, numbers or tasks into two items. A one-hour meeting usually gives 60–120 items. The last third of the meeting matters as much as the first — do not stop early. Skip only greetings and private small talk with no work content.
+Coverage: one item per distinct point — split a line that holds two facts, numbers or tasks into two items. A one-hour meeting usually gives 60–120 items. The last third of the meeting matters as much as the first — do not stop early. Skip only greetings and private small talk with no work content. If a separate conversation starts after the meeting has ended (after the goodbyes), give its items the topic "After the meeting".
 A speaker still labelled "Speaker N" has no known name: keep the label, do not guess.
 
 --- Transcript ---
@@ -378,22 +382,24 @@ Attendees: ${attendees}
 Tags: 2–5 short topic tags (project, customer, meeting series, subject), comma-separated
 
 ## Summary
-Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 2–4 bullets with the main outcomes. No paragraphs.
+Line 1: ONE sentence (max 20 words) with the bottom line of the meeting — what was decided or what changes. Then 3–5 bullets with what the reader must know: outcomes, key numbers, reasons. Someone who reads only the Summary should know what happened. No paragraphs.
 
 ## Discussion
-One bullet per topic, in the list's order: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Under it, one indented sub-bullet per item of that topic. Every item in the list must appear exactly once; add nothing that is not in the list. Keep each item's numbers, names, hedges ("about", "tbc"), "e.g." and who said it. Write "done" items in the past tense. Decisions and actions are listed separately later — use the same words here.
+Group the items by topic, not by time: one bullet per topic, even if the topic came up several times. At most 8 topics, most important first; merge small related topics, never unrelated ones. Format: "- **Topic (max 4 words)** — position or outcome in at most 2 sentences". Under it, at most 4 indented sub-bullets with the items that matter most: numbers, reasons, who held which position. You do not need to use every item: leave out small talk, step-by-step demos, repeated points and items that change nothing. Add nothing that is not in the list. Keep the numbers, names, hedges ("about", "tbc") and "e.g." of every item you use. Write "done" items in the past tense. Decisions and actions are listed separately later — give each its context here, in the same words. Those with little discussion go under a final "- **Other** —" bullet; items from a separate conversation after the meeting has ended go under "- **After the meeting** —".
 
 ## Open Issues
-The "open" items, one bullet each. Keep their hedges. If there are none, write "- none".
+The "open" items, plus any proposal or question in the list that was not settled — one bullet each, most important first, max 6. Keep their hedges. Write "- none" only if nothing is open.
 
 Accuracy comes before brevity:
 - Never turn a hedge into a fact, an exact number or an exact date.
 - Report, don't judge: no "refused", "insisted", "ordered", "crisis", "stranded", "immediately" unless the item says so.
-- Credit each item to the person it names. A speaker labelled "Speaker N" keeps that label.
+- When you name someone, name the person the item names. A speaker labelled "Speaker N" keeps that label.
+- Keep each fact with its own subject: when the list compares two things, do not move the limits or numbers of one to the other.
 
 Wording: the reader is tired and reads each line once — it must make sense on the first read.
 - Short sentences (max 20 words), one fact each.
 - Everyday words (B1 level). No buzzwords or filler ("leverage", "align on", "going forward", "in terms of", "it was agreed that"). Start each bullet with the key word.
+- Write the fact itself, not "X said that …". Name a person only for opinions, proposals, disagreements and commitments.
 - Keep names of people, companies, customers, products and projects (and their abbreviations) exactly as written.
 
 Output only the sections above — no Decisions or Action Items section, no preamble.
@@ -483,7 +489,10 @@ function assembleMinutes(rendered, items) {
 }
 
 function attendeesOf(m) {
-  return speakerIds(m).map(sp => displayName(m, sp)).join(', ');
+  // 이름 없는 "Speaker N"(잠깐 끼어든 사람)은 빼고, 다 이름이 없으면 그대로
+  const all = speakerIds(m).map(sp => displayName(m, sp));
+  const named = all.filter(n => !/^Speaker\s*\d+$/i.test(n));
+  return (named.length ? named : all).join(', ');
 }
 
 // 2단계 MoM 생성. onProgress(stage, text) — stage 1: 추출 중(원문 JSON), 2: 쓰는 중(마크다운)
